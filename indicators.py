@@ -8,8 +8,19 @@ describing the triggered flag if it is.
 """
 
 import logging
+import ipaddress
 
 # --- Indicator Functions ---
+
+def ip_edit(processed_event):
+    """
+    Checks if the "user" field contains an IP address.
+    """
+    user = processed_event.get('user', '')
+    try:
+        return "IPv4" if type(ipaddress.ip_address(user)) is ipaddress.IPv4Address else "IPv6"
+    except ValueError:
+        return None
 
 def large_removal(processed_event, logger=None, db_pool=None, removal_threshold_bytes=1000):
     """

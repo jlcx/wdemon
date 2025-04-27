@@ -10,6 +10,7 @@ import time
 import logging
 import os
 import datetime # For timestamps
+import traceback
 
 # Use modern psycopg (version 3)
 import psycopg
@@ -69,6 +70,69 @@ def close_db_pool():
         db_pool.close()
         logger.info("Database connection pool closed.")
 
+def store_flagged_event(db_pool, processed_event, flag_data):
+    """
+    Inserts a record into the flagged_events table.
+
+    Args:
+        db_pool (psycopg_pool.ConnectionPool): The database connection pool.
+        processed_event (dict): The dictionary containing processed event data.
+        flag_data (dict): The dictionary returned by the triggered indicator function.
+    """
+    if not db_pool:
+        logger.error("Cannot store flagged event: Database pool is not available.")
+        return
+
+    sql = """
+        INSERT INTO flagged_events (
+            rc_id, event_timestamp, item_qid, event_user,
+            indicator_name, indicator_details, revision_old, revision_new
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+    """
+    rc_id = processed_event.get('rc_id')
+    timestamp_dt = processed_event.get('timestamp_dt') # Already a datetime object
+    qid = processed_event.get('title')
+    user = processed_event.get('user')
+    indicator_name = flag_data.get('indicator', 'unknown_indicator')
+    # Convert details dict to JSON string for storing in JSONB field
+    details_json = json.dumps(flag_data)
+    rev_old = processed_event.get('revision', {}).get('old')
+    rev_new = processed_event.get('revision', {}).get('new')
+
+    # Basic validation
+    if not rc_id or not indicator_name:
+         logger.warning(f"Skipping flag storage: Missing rc_id or indicator_name. Event: {rc_id}")
+         return
+
+    conn = None # Initialize conn to None
+    try:
+        # Get a connection from the pool
+        with db_pool.connection() as conn:
+            # Use the connection (autocommit is often default or managed by 'with')
+            with conn.cursor() as cur:
+                cur.execute(sql, (
+                    rc_id,
+                    timestamp_dt, # Pass datetime object directly
+                    qid,
+                    user,
+                    indicator_name,
+                    details_json, # Pass JSON string
+                    rev_old,
+                    rev_new
+                ))
+            # No explicit conn.commit() needed typically with psycopg3 pools and 'with'
+            logger.debug(f"Successfully stored flag for RC_ID:{rc_id}, Indicator:{indicator_name}")
+
+    except psycopg.Error as e:
+        # Catch specific psycopg errors or broader Exception
+        logger.error(f"Database error storing flag for RC_ID:{rc_id}, Indicator:{indicator_name}: {e}", exc_info=True)
+        # Optional: Rollback if needed and autocommit is off (less common with 'with')
+        # if conn:
+        #     conn.rollback()
+    except Exception as e:
+         logger.error(f"Unexpected error storing flag for RC_ID:{rc_id}, Indicator:{indicator_name}: {e}", exc_info=True)
+    # The 'with db_pool.connection()' ensures the connection is returned to the pool
+
 # --- Stream Processing Function ---
 def check_recent_changes(output_queue):
     """
@@ -102,7 +166,7 @@ def check_recent_changes(output_queue):
                             dt_object = None
                             if timestamp:
                                 try:
-                                    dt_object = datetime.datetime.utcfromtimestamp(timestamp).replace(tzinfo=datetime.timezone.utc)
+                                    dt_object = datetime.datetime.fromtimestamp(timestamp, tz=datetime.timezone.utc)
                                 except (TypeError, ValueError):
                                     stream_logger.warning(f"Could not parse timestamp: {timestamp}")
 
@@ -115,7 +179,10 @@ def check_recent_changes(output_queue):
                                 'timestamp_unix': timestamp,
                                 'timestamp_dt': dt_object, # Datetime object
                                 'user': change.get('user'),
-                                'user_is_anon': change.get('user', '').count('.') == 3, # Basic IP check
+                                # 'user_is_anon': change.get('user', '').count('.') == 3, # Basic IP check...
+                                # maybe too basic; thinking about indicator using ipaddress library
+                                'patrolled': change.get('patrolled', False),
+                                # how to use 'patrolled'?  Exclude entirely, de-prioritize, and/or cancel out less-definite indicators?
                                 'bot': change.get('bot', False),
                                 'revision': change.get('revision'), # Dict with 'old', 'new' IDs
                                 'length': change.get('length'), # Dict with 'old', 'new' byte sizes
@@ -126,6 +193,8 @@ def check_recent_changes(output_queue):
 
                     except json.JSONDecodeError:
                         stream_logger.warning(f"Failed to decode JSON: {event.data[:200]}...") # Log snippet
+                        traceback.print_exc()
+                        print(event.data)
                     except Exception as e:
                         # Catch other processing errors within the loop
                         stream_logger.error(f"Error processing event data: {e}", exc_info=True)
@@ -216,12 +285,12 @@ if __name__ == '__main__':
                 if triggered_flags:
                     flagged_count += 1
                     logger.warning(f"FLAGS TRIGGERED for Title:{event_title} (RC_ID:{rc_id}): {triggered_flags}")
-                    # TODO: Implement desired action (e.g., store flags in DB, send alert)
-
+                    for flag in triggered_flags:
+                        store_flagged_event(db_pool, processed_event, flag)
 
                 # Log progress periodically
                 if processed_count % 500 == 0:
-                    logger.info(f"Processed: {processed_count} events. Flagged: {flagged_count}. Queue Size: {event_queue.qsize()}")
+                    logger.info(f"Processed: {processed_count} events. Flagged: {flagged_count}.")
 
             else:
                 # Avoid busy-waiting when the queue is empty
