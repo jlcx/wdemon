@@ -152,6 +152,10 @@ def check_recent_changes(output_queue):
             for event in client:
                 if event.event == 'message':
                     try:
+                        # Quickly check to avoid excessive errors in non-relevant wikis
+                        if TARGET_WIKI not in event.data: # Check if 'wikidatawiki' is roughly in the string
+                            logger.debug(f"Skipping non-{TARGET_WIKI} event data snippet: {event.data[:100]}...")
+                            continue
                         change = json.loads(event.data)
 
                         # --- Filter for relevant events ---
@@ -233,6 +237,13 @@ if __name__ == '__main__':
     # mp.set_start_method('spawn')
     event_queue = mp.Queue()
 
+    try:
+        print(f"Queue Size: {event_queue.qsize()}")
+        queue_size_available = True
+    except NotImplementedError:
+        logger.info(f"qsize() not available")
+        queue_size_available = False
+
     # Start the stream listener process as a daemon
     # Daemon processes are terminated automatically when the main process exits
     stream_listener_process = mp.Process(
@@ -290,7 +301,10 @@ if __name__ == '__main__':
 
                 # Log progress periodically
                 if processed_count % 500 == 0:
-                    logger.info(f"Processed: {processed_count} events. Flagged: {flagged_count}.")
+                    if queue_size_available:
+                        logger.info(f"Processed: {processed_count} events. Flagged: {flagged_count}. Queue Size: {event_queue.qsize()}")
+                    else:
+                        logger.info(f"Processed: {processed_count} events. Flagged: {flagged_count}")
 
             else:
                 # Avoid busy-waiting when the queue is empty
