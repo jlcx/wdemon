@@ -20,6 +20,12 @@ from sseclient import SSEClient as EventSource
 # Import indicator functions from the separate file
 import indicators
 
+tier_1_indicators = (
+    indicators.ip_edit,
+    indicators.large_removal)
+tier_2_indicators = () # may depend on tier 1; may involve local DB queries
+tier_3_indicators = () # may depend on tier 1 and/or 2; may involve API calls; use sparingly
+
 # --- Configuration ---
 # Load sensitive credentials from environment variables
 DB_NAME = os.environ.get("DB_NAME", "wikidata_db") # Example DB name
@@ -183,8 +189,6 @@ def check_recent_changes(output_queue):
                                 'timestamp_unix': timestamp,
                                 'timestamp_dt': dt_object, # Datetime object
                                 'user': change.get('user'),
-                                # 'user_is_anon': change.get('user', '').count('.') == 3, # Basic IP check...
-                                # maybe too basic; thinking about indicator using ipaddress library
                                 'patrolled': change.get('patrolled', False),
                                 # how to use 'patrolled'?  Exclude entirely, de-prioritize, and/or cancel out less-definite indicators?
                                 'bot': change.get('bot', False),
