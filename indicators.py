@@ -12,6 +12,8 @@ import ipaddress
 
 # --- Indicator Functions ---
 
+## Tier 1 indicators
+
 def ip_edit(processed_event):
     """
     Checks if the "user" field contains an IP address.
@@ -68,6 +70,14 @@ def large_removal(processed_event, logger=None, db_pool=None, removal_threshold_
     else:
         # Removal was below threshold
         return None
+
+#def self_reference_added():
+# TODO determine if this should be self_reference_added_t1 or something,
+# and then have a t3 version if the comment indicates that the item should be checked
+
+## Tier 2 indicators - local DB queries needed
+
+## Tier 3 indicators - API calls needed
 
 
 # --- Add other indicator functions below ---
