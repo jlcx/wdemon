@@ -12,7 +12,7 @@ import ipaddress
 
 # --- Indicator Functions ---
 
-## Tier 1 indicators
+## Tier 1 indicators - only event data needed
 
 def ip_edit(processed_event):
     """
@@ -75,9 +75,38 @@ def large_removal(processed_event, logger=None, db_pool=None, removal_threshold_
 # TODO determine if this should be self_reference_added_t1 or something,
 # and then have a t3 version if the comment indicates that the item should be checked
 
-## Tier 2 indicators - local DB queries needed
+## Tier 2 indicators - tier 1 results and/or local DB queries needed
 
-## Tier 3 indicators - API calls needed
+def high_wp_count_removed(processed_event, logger=None, db_pool=None):
+    # statement_wp_count = get_statement_wp_count(statement)
+    # do I have one threshold for a high wp_count, or generate a higher score the higher a statement's wp_count was?
+
+    # too much stuff to put in each indicator?  How could we move the DB and logging into something general?
+
+    threshold = 2 # if it's in multiple Wikipedias, maybe that's high enough?
+
+    if not db_pool:
+        if logger: logger.warning("DB pool not available for check_something_in_db")
+        return None # Cannot perform check without DB pool
+
+    qid = processed_event.get('title')
+    if not qid or not qid.startswith('Q'): return None
+
+    conn = None
+    try:
+        with db_pool.connection() as conn: # Get connection from pool
+            with conn.cursor() as cur:
+                cur.execute("SELECT wp_count FROM wp_links WHERE qid = %s and dst_qid = %s", (qid, dst_qid))
+                result = cur.fetchone()
+                if result and result[0] >= threshold: #TODO test
+                    if logger: logger.info(f"high_wp_count_removed triggered for {qid}")
+                    return {"indicator": "high_wp_count_removed", "details": "Found problematic value"}
+    except Exception as e:
+        if logger: logger.error(f"DB error in high_wp_count_removed for {qid}: {e}", exc_info=True)
+    # No 'finally' needed to return connection when using 'with db_pool.connection()'
+    return None
+
+## Tier 3 indicators - web API calls needed
 
 
 # --- Add other indicator functions below ---
