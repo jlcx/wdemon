@@ -10,6 +10,10 @@ describing the triggered flag if it is.
 import logging
 import ipaddress
 
+# --- Helper Functions ---
+
+from utils import parse_edit_comment
+
 # --- Indicator Functions ---
 
 ## Tier 1 indicators - only event data needed
@@ -71,9 +75,19 @@ def large_removal(processed_event, logger=None, db_pool=None, removal_threshold_
         # Removal was below threshold
         return None
 
-#def self_reference_added():
-# TODO determine if this should be self_reference_added_t1 or something,
-# and then have a t3 version if the comment indicates that the item should be checked
+def self_reference_added(processed_event, logger=None, db_pool=None):
+    # TODO determine if this should be self_reference_added_t1 or something,
+    # and then have a t3 version if the comment indicates that the item should be checked
+    indicator_name = "self_reference_added"
+    title = processed_event['title']
+    parsed_comment = parse_edit_comment(processed_event['comment'])
+    details = parsed_comment.get('details', {})
+    pid = parsed_comment.get('property_id', {})
+    if 'claim_value_qid' in details and details['claim_value_qid'] == title:
+        return {
+            "indicator": indicator_name,
+            "details": f"Self-reference added: {title} {pid} {title}"
+        }
 
 ## Tier 2 indicators - tier 1 results and/or local DB queries needed
 
