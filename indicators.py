@@ -88,6 +88,8 @@ def self_reference_added(processed_event, logger=None, db_pool=None):
             "indicator": indicator_name,
             "details": f"Self-reference added: {title} {pid} {title}"
         }
+    else:
+        return None
 
 ## Tier 2 indicators - tier 1 results and/or local DB queries needed
 
