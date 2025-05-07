@@ -91,6 +91,25 @@ def self_reference_added(processed_event, logger=None, db_pool=None):
     else:
         return None
 
+def life_dates_changed(processed_event, logger=None, db_pool=None):
+    """
+    Checks if an edit changed dates of birth (P569), death (P570), or other life dates
+    """
+    # TODO figure out how to approach other beginnings and endings; it's not all people, people!
+    indicator_name = "life_dates_changed"
+    date_props = ("P569", "P570")
+    title = processed_event['title']
+    parsed_comment = parse_edit_comment(processed_event['comment'])
+    pid = parsed_comment.get('property_id', {})
+    if pid in date_props:
+        logger.info("well, that's interesting")
+        return {
+            "indicator": indicator_name,
+            "details": f"Property {pid} changed on {title}"
+        }
+    else:
+        return None
+
 ## Tier 2 indicators - tier 1 results and/or local DB queries needed
 
 def high_wp_count_removed(processed_event, logger=None, db_pool=None):

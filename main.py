@@ -267,6 +267,7 @@ if __name__ == '__main__':
     active_indicators = [
         indicators.large_removal,
         indicators.self_reference_added,
+        indicators.life_dates_changed,
         # indicators.another_check,
         # indicators.check_requiring_db,
     ]
