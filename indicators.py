@@ -28,7 +28,7 @@ def ip_edit(processed_event):
     except ValueError:
         return None
 
-def large_removal(processed_event, logger=None, db_pool=None, removal_threshold_bytes=1000):
+def large_removal(processed_event, logger=None, db_pool=None, removal_threshold_bytes=2500):
     """
     Checks if an edit resulted in a large removal of content (bytes).
 
@@ -102,7 +102,7 @@ def life_dates_changed(processed_event, logger=None, db_pool=None):
     parsed_comment = parse_edit_comment(processed_event['comment'])
     pid = parsed_comment.get('property_id', {})
     if pid in date_props:
-        logger.info("well, that's interesting")
+        # logger.info("well, that's interesting")
         return {
             "indicator": indicator_name,
             "details": f"Property {pid} changed on {title}"
