@@ -112,6 +112,12 @@ def life_dates_changed(processed_event, logger=None, db_pool=None):
 
 ## Tier 2 indicators - tier 1 results and/or local DB queries needed
 
+def time_travel_edge(processed_event, logger=None, db_pool=None):
+    """
+    Checks if an edit results in a causal claim pointing back in time.
+    """
+    pass
+
 def high_wp_count_removed(processed_event, logger=None, db_pool=None):
     # statement_wp_count = get_statement_wp_count(statement)
     # do I have one threshold for a high wp_count, or generate a higher score the higher a statement's wp_count was?
