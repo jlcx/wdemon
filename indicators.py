@@ -116,6 +116,7 @@ def time_travel_edge(processed_event, logger=None, db_pool=None):
     """
     Checks if an edit results in a causal claim pointing back in time.
     """
+    # what are we checking for here?  Nodes with dates linked to/from the edited one, I guess
     pass
 
 def high_wp_count_removed(processed_event, logger=None, db_pool=None):
