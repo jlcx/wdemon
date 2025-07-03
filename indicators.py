@@ -150,6 +150,7 @@ def high_wp_count_removed(processed_event, logger=None, db_pool=None):
 
 ## Tier 3 indicators - web API calls needed
 
+# What goes here again?  Can I classify some of my live_monitor.py indicators here?
 
 # --- Add other indicator functions below ---
 # Example structure for an indicator needing DB access:
