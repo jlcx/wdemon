@@ -9,6 +9,9 @@ describing the triggered flag if it is.
 
 import logging
 import ipaddress
+import re
+
+TEMP_ACCOUNT_PATTERN = re.compile(r"^~20\d{2}(?:-\d{1,5})+$")
 
 # --- Helper Functions ---
 
@@ -17,6 +20,10 @@ from utils import parse_edit_comment
 # --- Indicator Functions ---
 
 ## Tier 1 indicators - only event data needed
+
+# description indicators needed: see ideas in descgusting.py
+
+# where to put indicators needing full item data, e.g. labels_less_consistent?
 
 def ip_edit(processed_event):
     """
@@ -27,6 +34,14 @@ def ip_edit(processed_event):
         return "IPv4" if type(ipaddress.ip_address(user)) is ipaddress.IPv4Address else "IPv6"
     except ValueError:
         return None
+
+def temp_edit(processed_event):
+    """
+    Checks if the "user" field contains a Wikimedia temporary account identifier
+    """
+    user = processed_event.get('user', '')
+    return bool(TEMP_ACCOUNT_PATTERN.match(user))
+
 
 def large_removal(processed_event, logger=None, db_pool=None, removal_threshold_bytes=2500):
     """
@@ -90,6 +105,8 @@ def self_reference_added(processed_event, logger=None, db_pool=None):
         }
     else:
         return None
+
+# TODO what about a more general "date changed"?  what about a more specific "date changed to" (e.g. 2001-9-11)?  how should these be organized?
 
 def life_dates_changed(processed_event, logger=None, db_pool=None):
     """
