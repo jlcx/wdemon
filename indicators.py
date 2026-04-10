@@ -25,7 +25,7 @@ from utils import parse_edit_comment
 
 # where to put indicators needing full item data, e.g. labels_less_consistent?
 
-def ip_edit(processed_event):
+def ip_edit(processed_event, logger=None, db_pool=None):
     """
     Checks if the "user" field contains an IP address.
     """
@@ -35,7 +35,7 @@ def ip_edit(processed_event):
     except ValueError:
         return None
 
-def temp_edit(processed_event):
+def temp_edit(processed_event, logger=None, db_pool=None):
     """
     Checks if the "user" field contains a Wikimedia temporary account identifier
     """
