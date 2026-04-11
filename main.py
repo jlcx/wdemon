@@ -3,12 +3,12 @@ import logging
 import time
 import pywikibot
 from pywikibot.comms.eventstreams import EventStreams
-from indicators import ip_edit, temp_edit, large_removal, self_reference_added, life_dates_changed
+from indicators import ip_edit, temp_edit, large_removal, self_reference_added, life_dates_changed, dob_first_century, bad_description
 
 logger = logging.getLogger('wdemon')
 
 # Tier 1 indicators — need only the event dict
-TIER1_INDICATORS = [ip_edit, temp_edit, large_removal, self_reference_added, life_dates_changed]
+TIER1_INDICATORS = [ip_edit, temp_edit, large_removal, self_reference_added, life_dates_changed, dob_first_century, bad_description]
 
 def run_wikidata_monitor():
     """

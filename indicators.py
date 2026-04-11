@@ -10,8 +10,10 @@ describing the triggered flag if it is.
 import logging
 import ipaddress
 import re
+import string
 
 TEMP_ACCOUNT_PATTERN = re.compile(r"^~20\d{2}(?:-\d{1,5})+$")
+FIRST_CENTURY_DATE = re.compile(r'\b(\d{1,2})\s+CE\b')
 
 # --- Helper Functions ---
 
@@ -126,6 +128,75 @@ def life_dates_changed(processed_event, logger=None, db_pool=None):
         }
     else:
         return None
+
+BAD_DESC_ARTICLES = ('a ', 'an ', 'the ')
+BAD_DESC_AD_WORDS = ('Discover ', 'Enjoy ', 'Indulge ', 'Book ', 'Reserve ', 'Buy ', 'Get ', 'Hire ')
+
+def bad_description(processed_event, logger=None, db_pool=None):
+    """
+    Flags description edits that have multiple quality issues, based on
+    Wikidata description guidelines and heuristics from editing experience.
+    Triggers when 2+ issues are found.
+    """
+    indicator_name = "bad_description"
+    parsed_comment = parse_edit_comment(processed_event.get('comment', ''))
+    if not parsed_comment.get('action', '').startswith('wbsetdescription'):
+        return None
+    desc = parsed_comment.get('details', {}).get('manual_comment_part', '')
+    if not desc:
+        return None
+
+    issues = []
+    if len(desc) > 140:
+        issues.append('too_long')
+    if desc[0].isupper():
+        issues.append('starts_capitalized')
+    if desc[-1] in string.punctuation:
+        issues.append('ends_with_punctuation')
+    if desc.lower().startswith(BAD_DESC_ARTICLES):
+        issues.append('starts_with_article')
+    if any(w in desc for w in BAD_DESC_AD_WORDS):
+        issues.append('ad_language')
+    if '\u00ae' in desc or '\u2122' in desc:
+        issues.append('contains_trademark')
+    if '  ' in desc:
+        issues.append('double_space')
+    if ' ,' in desc:
+        issues.append('space_before_comma')
+    if '&amp;' in desc or '&lt;' in desc or '&gt;' in desc or '&quot;' in desc:
+        issues.append('html_escape')
+
+    if len(issues) >= 2:
+        title = processed_event.get('title', '?')
+        return {
+            "indicator": indicator_name,
+            "issues": issues,
+            "details": f"{title}: {len(issues)} issues ({', '.join(issues)})"
+        }
+    return None
+
+def dob_first_century(processed_event, logger=None, db_pool=None):
+    """
+    Flags edits that set date of birth (P569) to a first-century value (years 1-99 CE).
+    These are almost always mistakes — someone entering a day or month number as the year.
+    """
+    indicator_name = "dob_first_century"
+    parsed_comment = parse_edit_comment(processed_event.get('comment', ''))
+    trailing = parsed_comment.get('details', {}).get('manual_comment_part', '')
+    # property_id may be None when the value isn't a QID link (e.g. dates),
+    # so also check for P569 directly in the trailing text
+    pid = parsed_comment.get('property_id')
+    if pid != 'P569' and '[[Property:P569]]' not in trailing:
+        return None
+    m = FIRST_CENTURY_DATE.search(trailing)
+    if m:
+        year = int(m.group(1))
+        title = processed_event.get('title', '?')
+        return {
+            "indicator": indicator_name,
+            "details": f"P569 on {title} set to year {year} CE"
+        }
+    return None
 
 ## Tier 2 indicators - tier 1 results and/or local DB queries needed
 
