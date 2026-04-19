@@ -8,12 +8,10 @@ describing the triggered flag if it is.
 """
 
 import logging
-import ipaddress
 import re
 import string
 from collections import Counter
 
-TEMP_ACCOUNT_PATTERN = re.compile(r"^~20\d{2}(?:-\d{1,5})+$")
 FIRST_CENTURY_DATE = re.compile(r'\b(\d{1,2})\s+CE\b')
 
 # --- Helper Functions ---
@@ -27,24 +25,6 @@ from utils import parse_edit_comment
 # description indicators needed: see ideas in descgusting.py
 
 # where to put indicators needing full item data, e.g. labels_less_consistent?
-
-def ip_edit(processed_event, logger=None, db_pool=None):
-    """
-    Checks if the "user" field contains an IP address.
-    """
-    user = processed_event.get('user', '')
-    try:
-        return "IPv4" if type(ipaddress.ip_address(user)) is ipaddress.IPv4Address else "IPv6"
-    except ValueError:
-        return None
-
-def temp_edit(processed_event, logger=None, db_pool=None):
-    """
-    Checks if the "user" field contains a Wikimedia temporary account identifier
-    """
-    user = processed_event.get('user', '')
-    return bool(TEMP_ACCOUNT_PATTERN.match(user))
-
 
 def large_removal(processed_event, logger=None, db_pool=None, removal_threshold_bytes=2500):
     """

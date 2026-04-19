@@ -5,7 +5,7 @@ import pywikibot
 from psycopg_pool import ConnectionPool
 from pywikibot.comms.eventstreams import EventStreams
 from indicators import (
-    ip_edit, temp_edit, large_removal, self_reference_added,
+    large_removal, self_reference_added,
     life_dates_changed, dob_first_century, bad_description,
     high_wp_count_removed, labels_less_consistent,
 )
@@ -16,7 +16,7 @@ logger = logging.getLogger('wdemon')
 DB_CONNINFO = "dbname=algae"
 
 # Tier 1 indicators — need only the event dict
-TIER1_INDICATORS = [ip_edit, temp_edit, large_removal, self_reference_added, life_dates_changed, dob_first_century, bad_description]
+TIER1_INDICATORS = [large_removal, self_reference_added, life_dates_changed, dob_first_century, bad_description]
 
 # Tier 2 indicators — also need a psycopg ConnectionPool
 TIER2_INDICATORS = [high_wp_count_removed, labels_less_consistent]
