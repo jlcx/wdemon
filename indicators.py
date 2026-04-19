@@ -131,12 +131,46 @@ def life_dates_changed(processed_event, logger=None, db_pool=None):
 
 BAD_DESC_ARTICLES = ('a ', 'an ', 'the ')
 BAD_DESC_AD_WORDS = ('Discover ', 'Enjoy ', 'Indulge ', 'Book ', 'Reserve ', 'Buy ', 'Get ', 'Hire ')
+# First-word proper adjectives that legitimately start English descriptions.
+# Extend as needed; keep alphabetized for easy editing.
+PROPER_ADJECTIVES = frozenset({
+    'American', 'Argentine', 'Argentinian', 'Australian', 'Brazilian',
+    'British', 'Canadian', 'Chinese', 'Dutch', 'Egyptian', 'English',
+    'French', 'German', 'Greek', 'Indian', 'Irish', 'Italian',
+    'Japanese', 'Korean', 'Mexican', 'Nigerian', 'Norwegian', 'Polish',
+    'Russian', 'Scottish', 'Spanish', 'Swedish', 'Turkish', 'Welsh',
+})
 
-def bad_description(processed_event, logger=None, db_pool=None):
+def _first_word(desc):
+    return desc.split(' ', 1)[0] if desc else ''
+
+def _balanced_trailing_paren(desc):
+    return desc.endswith(')') and desc.count('(') == desc.count(')')
+
+def _len_score(desc):
+    return max(0.0, (len(desc) - 42) * 0.02)
+
+# Each rule: score(desc) -> float (0 = no fire), optional suppress_if(desc) -> bool.
+# Weights are independent; total >= threshold triggers the indicator.
+BAD_DESC_RULES = [
+    {"name": "too_long",              "score": _len_score},
+    {"name": "starts_capitalized",    "score": lambda d: 1.0 if d and d[0].isupper() else 0.0,
+                                      "suppress_if": lambda d: _first_word(d) in PROPER_ADJECTIVES},
+    {"name": "ends_with_punctuation", "score": lambda d: 1.0 if d and d[-1] in string.punctuation else 0.0,
+                                      "suppress_if": _balanced_trailing_paren},
+    {"name": "starts_with_article",   "score": lambda d: 1.0 if d.lower().startswith(BAD_DESC_ARTICLES) else 0.0},
+    {"name": "ad_language",           "score": lambda d: 1.0 if any(w in d for w in BAD_DESC_AD_WORDS) else 0.0},
+    {"name": "contains_trademark",    "score": lambda d: 1.0 if ('\u00ae' in d or '\u2122' in d) else 0.0},
+    {"name": "double_space",          "score": lambda d: 0.5 if '  ' in d else 0.0},
+    {"name": "space_before_comma",    "score": lambda d: 0.5 if ' ,' in d else 0.0},
+    {"name": "html_escape",           "score": lambda d: 1.0 if ('&amp;' in d or '&lt;' in d or '&gt;' in d or '&quot;' in d) else 0.0},
+]
+BAD_DESC_THRESHOLD = 2.0
+
+def bad_description(processed_event, logger=None, db_pool=None, threshold=BAD_DESC_THRESHOLD):
     """
-    Flags description edits that have multiple quality issues, based on
-    Wikidata description guidelines and heuristics from editing experience.
-    Triggers when 2+ issues are found.
+    Flags description edits whose weighted score across BAD_DESC_RULES reaches
+    `threshold`. Each rule contributes a float; some have suppress_if exceptions.
     """
     indicator_name = "bad_description"
     parsed_comment = parse_edit_comment(processed_event.get('comment', ''))
@@ -147,33 +181,28 @@ def bad_description(processed_event, logger=None, db_pool=None):
         return None
 
     issues = []
-    if len(desc) > 140:
-        issues.append('too_long')
-    if desc[0].isupper():
-        issues.append('starts_capitalized')
-    if desc[-1] in string.punctuation:
-        issues.append('ends_with_punctuation')
-    if desc.lower().startswith(BAD_DESC_ARTICLES):
-        issues.append('starts_with_article')
-    if any(w in desc for w in BAD_DESC_AD_WORDS):
-        issues.append('ad_language')
-    if '\u00ae' in desc or '\u2122' in desc:
-        issues.append('contains_trademark')
-    if '  ' in desc:
-        issues.append('double_space')
-    if ' ,' in desc:
-        issues.append('space_before_comma')
-    if '&amp;' in desc or '&lt;' in desc or '&gt;' in desc or '&quot;' in desc:
-        issues.append('html_escape')
+    total = 0.0
+    for rule in BAD_DESC_RULES:
+        suppress = rule.get('suppress_if')
+        if suppress and suppress(desc):
+            continue
+        s = rule['score'](desc)
+        if s > 0:
+            issues.append({"name": rule['name'], "score": round(s, 2)})
+            total += s
 
-    if len(issues) >= 2:
-        title = processed_event.get('title', '?')
-        return {
-            "indicator": indicator_name,
-            "issues": issues,
-            "details": f"{title}: {len(issues)} issues ({', '.join(issues)})"
-        }
-    return None
+    if total < threshold:
+        return None
+
+    title = processed_event.get('title', '?')
+    breakdown = ', '.join(f"{i['name']}={i['score']}" for i in issues)
+    return {
+        "indicator": indicator_name,
+        "score": round(total, 2),
+        "threshold": threshold,
+        "issues": issues,
+        "details": f"{title}: score={round(total, 2)} ({breakdown})",
+    }
 
 def dob_first_century(processed_event, logger=None, db_pool=None):
     """
@@ -207,34 +236,73 @@ def time_travel_edge(processed_event, logger=None, db_pool=None):
     # what are we checking for here?  Nodes with dates linked to/from the edited one, I guess
     pass
 
-def high_wp_count_removed(processed_event, logger=None, db_pool=None):
-    # statement_wp_count = get_statement_wp_count(statement)
-    # do I have one threshold for a high wp_count, or generate a higher score the higher a statement's wp_count was?
+PROP_QID_TRAILING = re.compile(r'\[\[Property:(P\d+)\]\]:\s*\[\[(Q\d+)\]\]', re.IGNORECASE)
 
-    # too much stuff to put in each indicator?  How could we move the DB and logging into something general?
-
-    threshold = 2 # if it's in multiple Wikipedias, maybe that's high enough?
-
+def high_wp_count_removed(processed_event, logger=None, db_pool=None, threshold=2):
+    """
+    Flags claim removals where the removed src→dst edge has a high Wikipedia
+    co-occurrence count in wp_links. Default threshold=2 (present in ≥2 wikis).
+    """
+    indicator_name = "high_wp_count_removed"
     if not db_pool:
-        if logger: logger.warning("DB pool not available for check_something_in_db")
-        return None # Cannot perform check without DB pool
+        if logger:
+            logger.debug(f"{indicator_name}: db_pool not provided")
+        return None
 
-    qid = processed_event.get('title')
-    if not qid or not qid.startswith('Q'): return None
+    src_qid = processed_event.get('title')
+    if not src_qid or not src_qid.startswith('Q'):
+        return None
 
-    conn = None
+    comment = processed_event.get('comment', '')
+    parsed = parse_edit_comment(comment)
+    if not parsed.get('action', '').startswith('wbremoveclaims'):
+        return None
+
+    dst_qid = parsed.get('details', {}).get('claim_value_qid')
+    pid = parsed.get('property_id')
+    if not dst_qid:
+        # remove-claim comments carry the target as trailing "[[Property:Pxx]]: [[Qyy]]";
+        # parse_edit_comment's remove branch doesn't capture it, so do it here.
+        m = PROP_QID_TRAILING.search(comment)
+        if m:
+            pid = pid or m.group(1).upper()
+            dst_qid = m.group(2).upper()
+    if not dst_qid:
+        return None
+
     try:
-        with db_pool.connection() as conn: # Get connection from pool
+        with db_pool.connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT wp_count FROM wp_links WHERE qid = %s and dst_qid = %s", (qid, dst_qid))
-                result = cur.fetchone()
-                if result and result[0] >= threshold: #TODO test
-                    if logger: logger.info(f"high_wp_count_removed triggered for {qid}")
-                    return {"indicator": "high_wp_count_removed", "details": "Found problematic value"}
+                cur.execute(
+                    "SELECT wp_count FROM wp_links WHERE src = %s AND dst = %s",
+                    (src_qid, dst_qid),
+                )
+                row = cur.fetchone()
     except Exception as e:
-        if logger: logger.error(f"DB error in high_wp_count_removed for {qid}: {e}", exc_info=True)
-    # No 'finally' needed to return connection when using 'with db_pool.connection()'
-    return None
+        if logger:
+            logger.error(
+                f"{indicator_name} DB error for {src_qid}->{dst_qid}: {e}",
+                exc_info=True,
+            )
+        return None
+
+    if not row or row[0] is None or row[0] < threshold:
+        return None
+
+    wp_count = row[0]
+    if logger:
+        logger.info(
+            f"{indicator_name}: {src_qid} {pid} {dst_qid} (wp_count={wp_count})"
+        )
+    return {
+        "indicator": indicator_name,
+        "src": src_qid,
+        "dst": dst_qid,
+        "property_id": pid,
+        "wp_count": wp_count,
+        "threshold": threshold,
+        "details": f"Removed {src_qid} {pid} {dst_qid} with wp_count={wp_count}",
+    }
 
 ## Tier 3 indicators - web API calls needed
 
