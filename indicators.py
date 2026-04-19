@@ -11,6 +11,7 @@ import logging
 import ipaddress
 import re
 import string
+from collections import Counter
 
 TEMP_ACCOUNT_PATTERN = re.compile(r"^~20\d{2}(?:-\d{1,5})+$")
 FIRST_CENTURY_DATE = re.compile(r'\b(\d{1,2})\s+CE\b')
@@ -302,6 +303,98 @@ def high_wp_count_removed(processed_event, logger=None, db_pool=None, threshold=
         "wp_count": wp_count,
         "threshold": threshold,
         "details": f"Removed {src_qid} {pid} {dst_qid} with wp_count={wp_count}",
+    }
+
+def labels_less_consistent(processed_event, logger=None, db_pool=None, consensus_threshold=3):
+    """
+    Flags label edits where the language's pre-edit label matched a cross-language
+    consensus but the new label diverges from it.
+
+    Triggers iff:
+      - ≥ consensus_threshold OTHER languages share the same normalized label
+        (stripped, casefolded);
+      - the DB's current (pre-edit) row for this (qid, lang) matches that consensus;
+      - the new label in the edit does not.
+
+    The pre-edit match requirement keeps legitimate transliteration edits (which
+    never matched the consensus to begin with) from triggering.
+    """
+    indicator_name = "labels_less_consistent"
+    if not db_pool:
+        if logger:
+            logger.debug(f"{indicator_name}: db_pool not provided")
+        return None
+
+    qid = processed_event.get('title')
+    if not qid or not qid.startswith('Q'):
+        return None
+
+    parsed = parse_edit_comment(processed_event.get('comment', ''))
+    if parsed.get('action') != 'wbsetlabel-set':
+        return None
+
+    lang = parsed.get('language')
+    new_label = (parsed.get('details') or {}).get('manual_comment_part', '')
+    if not lang or not new_label:
+        return None
+    new_norm = new_label.strip().casefold()
+
+    try:
+        with db_pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT lang, label FROM wd_labels WHERE qid = %s",
+                    (qid,),
+                )
+                rows = cur.fetchall()
+    except Exception as e:
+        if logger:
+            logger.error(f"{indicator_name} DB error for {qid}: {e}", exc_info=True)
+        return None
+    if not rows:
+        return None
+
+    counts = Counter()
+    originals = {}
+    old_label = None
+    for row_lang, row_label in rows:
+        if not row_label:
+            continue
+        if row_lang == lang:
+            old_label = row_label
+            continue
+        norm = row_label.strip().casefold()
+        counts[norm] += 1
+        originals.setdefault(norm, row_label.strip())
+    if not counts:
+        return None
+
+    consensus_norm, consensus_n = counts.most_common(1)[0]
+    if consensus_n < consensus_threshold:
+        return None
+    if old_label is None or old_label.strip().casefold() != consensus_norm:
+        return None
+    if new_norm == consensus_norm:
+        return None
+
+    consensus_display = originals.get(consensus_norm, consensus_norm)
+    if logger:
+        logger.info(
+            f"{indicator_name}: {qid}[{lang}] {old_label!r} -> {new_label!r}; "
+            f"consensus {consensus_display!r} in {consensus_n} other langs"
+        )
+    return {
+        "indicator": indicator_name,
+        "qid": qid,
+        "lang": lang,
+        "old_label": old_label,
+        "new_label": new_label,
+        "consensus_label": consensus_display,
+        "consensus_count": consensus_n,
+        "details": (
+            f"{qid}[{lang}]: {old_label!r} -> {new_label!r}; "
+            f"{consensus_n} other langs agree on {consensus_display!r}"
+        ),
     }
 
 ## Tier 3 indicators - web API calls needed

@@ -7,8 +7,9 @@ from pywikibot.comms.eventstreams import EventStreams
 from indicators import (
     ip_edit, temp_edit, large_removal, self_reference_added,
     life_dates_changed, dob_first_century, bad_description,
-    high_wp_count_removed,
+    high_wp_count_removed, labels_less_consistent,
 )
+from db import record_flag, mark_reverts
 
 logger = logging.getLogger('wdemon')
 
@@ -18,7 +19,9 @@ DB_CONNINFO = "dbname=algae"
 TIER1_INDICATORS = [ip_edit, temp_edit, large_removal, self_reference_added, life_dates_changed, dob_first_century, bad_description]
 
 # Tier 2 indicators — also need a psycopg ConnectionPool
-TIER2_INDICATORS = [high_wp_count_removed]
+TIER2_INDICATORS = [high_wp_count_removed, labels_less_consistent]
+
+ALL_INDICATORS = TIER1_INDICATORS + TIER2_INDICATORS
 
 def run_wikidata_monitor(db_pool=None):
     """
@@ -44,17 +47,7 @@ def run_wikidata_monitor(db_pool=None):
 
                 pywikibot.output(f"[{readable_time}] {user}: {title} — {comment}")
 
-                for indicator in TIER1_INDICATORS:
-                    try:
-                        result = indicator(event, logger=logger)
-                    except Exception as e:
-                        logger.warning(f"{indicator.__name__} error on {title}: {e}")
-                        continue
-                    if result:
-                        rev = event.get('revision', {}).get('new', '?')
-                        pywikibot.output(f"  ⚑ {indicator.__name__} [{title} r{rev}]: {result}")
-
-                for indicator in TIER2_INDICATORS:
+                for indicator in ALL_INDICATORS:
                     try:
                         result = indicator(event, logger=logger, db_pool=db_pool)
                     except Exception as e:
@@ -63,6 +56,11 @@ def run_wikidata_monitor(db_pool=None):
                     if result:
                         rev = event.get('revision', {}).get('new', '?')
                         pywikibot.output(f"  ⚑ {indicator.__name__} [{title} r{rev}]: {result}")
+                        record_flag(db_pool, event, indicator.__name__, result)
+
+                reverted = mark_reverts(db_pool, event)
+                if reverted:
+                    pywikibot.output(f"  ↩ marked {reverted} row(s) reverted via {user}")
 
         except KeyboardInterrupt:
             pywikibot.output("\n>>> Monitor stopped by user.")
