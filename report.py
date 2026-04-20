@@ -47,6 +47,7 @@ def print_user_rollup(cur, since, limit):
                MAX(processed_timestamp) AS last_flag_at
           FROM flagged_events
          WHERE reverted_at IS NULL
+           AND corrected_at IS NULL
            AND processed_timestamp > NOW() - %s::interval
          GROUP BY event_user
          ORDER BY n_flags DESC, last_flag_at DESC
@@ -75,6 +76,7 @@ def print_recent_flags(cur, since, limit, user_filter):
                indicator_details, revision_new
           FROM flagged_events
          WHERE reverted_at IS NULL
+           AND corrected_at IS NULL
            AND processed_timestamp > NOW() - %s::interval
     """
     params = [since]

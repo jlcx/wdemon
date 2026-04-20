@@ -10,7 +10,8 @@ CREATE TABLE flagged_events (
     indicator_details JSONB,                   -- Store the details dict from the indicator as JSONB
     revision_old BIGINT,                       -- Old revision ID (if available)
     revision_new BIGINT,                       -- New revision ID (if available)
-    reverted_at TIMESTAMPTZ                    -- When a revert/undo of revision_new was observed; NULL = still standing
+    reverted_at TIMESTAMPTZ,                   -- When a revert/undo of revision_new was observed; NULL = still standing
+    corrected_at TIMESTAMPTZ                   -- When a subsequent non-flagging edit on the same slot fixed the content; NULL = not corrected
     -- Optional: Add an index for faster querying on rc_id or item_qid
     -- CREATE INDEX idx_flagged_events_rc_id ON flagged_events(rc_id);
     -- CREATE INDEX idx_flagged_events_item_qid ON flagged_events(item_qid);
@@ -31,3 +32,4 @@ COMMENT ON COLUMN flagged_events.indicator_details IS 'Details dict from the ind
 COMMENT ON COLUMN flagged_events.revision_old IS 'Old revision ID (if available)';
 COMMENT ON COLUMN flagged_events.revision_new IS 'New revision ID (if available)';
 COMMENT ON COLUMN flagged_events.reverted_at IS 'Set when a subsequent stream event undoes revision_new; NULL = not yet reverted';
+COMMENT ON COLUMN flagged_events.corrected_at IS 'Set when a subsequent non-flagging edit on the same slot (e.g. (item_qid, lang) for description flags) fixes the content; NULL = not yet corrected';

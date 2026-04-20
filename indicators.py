@@ -111,7 +111,7 @@ def life_dates_changed(processed_event, logger=None, db_pool=None):
         return None
 
 BAD_DESC_ARTICLES = ('a ', 'an ', 'the ')
-BAD_DESC_AD_WORDS = ('Discover ', 'Enjoy ', 'Indulge ', 'Book ', 'Reserve ', 'Buy ', 'Get ', 'Hire ')
+BAD_DESC_AD_WORDS = ('Discover ', 'Enjoy ', 'Indulge ', 'Book ', 'Reserve ', 'Buy ', 'Get ', 'Hire ', 'SEO', 'AEO', 'marketing', 'marketer', 'consultant', 'sales', 'influencer', 'content creator')
 # First-word proper adjectives that legitimately start English descriptions.
 # Extend as needed; keep alphabetized for easy editing.
 PROPER_ADJECTIVES = frozenset({
@@ -179,6 +179,7 @@ def bad_description(processed_event, logger=None, db_pool=None, threshold=BAD_DE
     breakdown = ', '.join(f"{i['name']}={i['score']}" for i in issues)
     return {
         "indicator": indicator_name,
+        "lang": parsed_comment.get('language'),
         "score": round(total, 2),
         "threshold": threshold,
         "issues": issues,
@@ -381,27 +382,3 @@ def labels_less_consistent(processed_event, logger=None, db_pool=None, consensus
 
 # What goes here again?  Can I classify some of my live_monitor.py indicators here?
 
-# --- Add other indicator functions below ---
-# Example structure for an indicator needing DB access:
-#
-# def check_something_in_db(processed_event, logger=None, db_pool=None):
-#     if not db_pool:
-#         if logger: logger.warning("DB pool not available for check_something_in_db")
-#         return None # Cannot perform check without DB pool
-#
-#     qid = processed_event.get('title')
-#     if not qid or not qid.startswith('Q'): return None
-#
-#     conn = None
-#     try:
-#         with db_pool.connection() as conn: # Get connection from pool
-#             with conn.cursor() as cur:
-#                 cur.execute("SELECT some_value FROM some_table WHERE qid = %s", (qid,))
-#                 result = cur.fetchone()
-#                 if result and result[0] == 'problematic_value':
-#                     if logger: logger.info(f"check_something_in_db triggered for {qid}")
-#                     return {"indicator": "check_something_in_db", "details": "Found problematic value"}
-#     except Exception as e:
-#         if logger: logger.error(f"DB error in check_something_in_db for {qid}: {e}", exc_info=True)
-#     # No 'finally' needed to return connection when using 'with db_pool.connection()'
-#     return None

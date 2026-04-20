@@ -68,6 +68,74 @@ def record_flag(db_pool, event, indicator_name, result):
 REVERT_TAGS = frozenset({'mw-undo', 'mw-manual-revert', 'mw-rollback'})
 
 
+def mark_corrections(db_pool, event, fired_indicators):
+    """
+    For indicators whose domain matches this event's action but which did NOT
+    fire on it, mark prior unreverted + uncorrected flagged_events rows on the
+    same slot as corrected. Returns total rowcount across indicators.
+
+    Slot mapping per indicator:
+      bad_description         -> (item_qid, details->>'lang')   action wbsetdescription-*
+      labels_less_consistent  -> (item_qid, details->>'lang')   action wbsetlabel-set
+
+    Known limitation: if a correction is itself later reverted, the bad content
+    comes back, but the flag's corrected_at remains set (it is not cleared).
+    The report will still treat the flag as resolved in that edge case.
+    """
+    if not db_pool:
+        return 0
+
+    parsed = parse_edit_comment(event.get('comment', ''))
+    action = parsed.get('action', '') or ''
+    qid = event.get('title')
+    lang = parsed.get('language')
+    if not qid:
+        return 0
+
+    total = 0
+    try:
+        with db_pool.connection() as conn, conn.cursor() as cur:
+            if (action.startswith('wbsetdescription')
+                    and 'bad_description' not in fired_indicators
+                    and lang):
+                cur.execute(
+                    """
+                    UPDATE flagged_events
+                       SET corrected_at = NOW()
+                     WHERE indicator_name = 'bad_description'
+                       AND item_qid = %s
+                       AND (indicator_details->>'lang') = %s
+                       AND reverted_at IS NULL
+                       AND corrected_at IS NULL
+                    """,
+                    (qid, lang),
+                )
+                total += cur.rowcount
+
+            if (action == 'wbsetlabel-set'
+                    and 'labels_less_consistent' not in fired_indicators
+                    and lang):
+                cur.execute(
+                    """
+                    UPDATE flagged_events
+                       SET corrected_at = NOW()
+                     WHERE indicator_name = 'labels_less_consistent'
+                       AND item_qid = %s
+                       AND (indicator_details->>'lang') = %s
+                       AND reverted_at IS NULL
+                       AND corrected_at IS NULL
+                    """,
+                    (qid, lang),
+                )
+                total += cur.rowcount
+        return total
+    except Exception as e:
+        logger.error(
+            f"mark_corrections failed on event {event.get('id')}: {e}", exc_info=True
+        )
+        return 0
+
+
 def mark_reverts(db_pool, event):
     """
     If `event` looks like an undo/revert, mark matching flagged_events rows as

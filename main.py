@@ -9,7 +9,7 @@ from indicators import (
     life_dates_changed, dob_first_century, bad_description,
     high_wp_count_removed, labels_less_consistent,
 )
-from db import record_flag, mark_reverts
+from db import record_flag, mark_reverts, mark_corrections
 
 logger = logging.getLogger('wdemon')
 
@@ -47,6 +47,7 @@ def run_wikidata_monitor(db_pool=None):
 
                 pywikibot.output(f"[{readable_time}] {user}: {title} — {comment}")
 
+                fired = set()
                 for indicator in ALL_INDICATORS:
                     try:
                         result = indicator(event, logger=logger, db_pool=db_pool)
@@ -54,9 +55,14 @@ def run_wikidata_monitor(db_pool=None):
                         logger.warning(f"{indicator.__name__} error on {title}: {e}")
                         continue
                     if result:
+                        fired.add(indicator.__name__)
                         rev = event.get('revision', {}).get('new', '?')
                         pywikibot.output(f"  ⚑ {indicator.__name__} [{title} r{rev}]: {result}")
                         record_flag(db_pool, event, indicator.__name__, result)
+
+                corrected = mark_corrections(db_pool, event, fired)
+                if corrected:
+                    pywikibot.output(f"  ✓ marked {corrected} row(s) corrected via {user}")
 
                 reverted = mark_reverts(db_pool, event)
                 if reverted:
