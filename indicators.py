@@ -17,6 +17,13 @@ FIRST_CENTURY_DATE = re.compile(r'\b(\d{1,2})\s+CE\b')
 # --- Helper Functions ---
 
 from utils import parse_edit_comment
+from wd_constants import starts as WD_STARTS, ends as WD_ENDS
+
+START_PROPS = frozenset(WD_STARTS.keys())
+END_PROPS = frozenset(WD_ENDS.keys())
+START_END_PROPS = START_PROPS | END_PROPS
+
+PROPERTY_LINK_RE = re.compile(r'\[\[Property:(P\d+)\]\]', re.IGNORECASE)
 
 # --- Indicator Functions ---
 
@@ -112,6 +119,8 @@ def life_dates_changed(processed_event, logger=None, db_pool=None):
 
 BAD_DESC_ARTICLES = ('a ', 'an ', 'the ')
 BAD_DESC_AD_WORDS = ('Discover ', 'Enjoy ', 'Indulge ', 'Book ', 'Reserve ', 'Buy ', 'Get ', 'Hire ', 'SEO', 'AEO', 'marketing', 'marketer', 'consultant', 'sales', 'influencer', 'content creator')
+BAD_DESC_SUBJECTIVE = ('best', 'worst', 'good', 'bad ', 'terrible', 'horrible', 'beautiful', 'ugly', 'greatest', 'leading', 'premier', 'premium', 'finest')
+BAD_DESC_VERBS = ('is ', 'are', 'was ', 'were ')
 # First-word proper adjectives that legitimately start English descriptions.
 # Extend as needed; keep alphabetized for easy editing.
 PROPER_ADJECTIVES = frozenset({
@@ -141,6 +150,8 @@ BAD_DESC_RULES = [
                                       "suppress_if": _balanced_trailing_paren},
     {"name": "starts_with_article",   "score": lambda d: 1.0 if d.lower().startswith(BAD_DESC_ARTICLES) else 0.0},
     {"name": "ad_language",           "score": lambda d: 1.0 if any(w in d for w in BAD_DESC_AD_WORDS) else 0.0},
+    {"name": "subjective",            "score": lambda d: 1.0 if any(w in d for w in BAD_DESC_SUBJECTIVE) else 0.0},
+    {"name": "verb",                  "score": lambda d: 1.0 if any(w in d for w in BAD_DESC_VERBS) else 0.0},
     {"name": "contains_trademark",    "score": lambda d: 1.0 if ('\u00ae' in d or '\u2122' in d) else 0.0},
     {"name": "double_space",          "score": lambda d: 0.5 if '  ' in d else 0.0},
     {"name": "space_before_comma",    "score": lambda d: 0.5 if ' ,' in d else 0.0},
@@ -211,12 +222,356 @@ def dob_first_century(processed_event, logger=None, db_pool=None):
 
 ## Tier 2 indicators - tier 1 results and/or local DB queries needed
 
+# Properties where X --[P]--> Y implies Y should predate X.
+# A violation — target post-dates subject — is the "time travel" signal.
+CAUSAL_BACKWARD = frozenset({
+    'P737',   # influenced by
+    'P941',   # inspired by
+    'P144',   # based on
+    'P5191',  # derived from
+    'P5059',  # modified version of
+    'P629',   # edition or translation of
+    'P9810',  # remix of
+    'P1877',  # after a work by
+    'P155',   # follows
+    'P1365',  # replaces
+    'P22',    # father
+    'P25',    # mother
+    'P184',   # doctoral advisor
+    'P1066',  # student of
+    'P170',   # creator
+    'P50',    # author
+    'P86',    # composer
+    'P87',    # librettist
+    'P84',    # architect
+    'P110',   # illustrator
+    'P178',   # developer
+    'P943',   # programmer
+    'P287',   # designed by
+    'P176',   # manufacturer
+    'P57',    # director
+    'P58',    # screenwriter
+    'P162',   # producer
+    'P272',   # production company
+    'P61',    # discoverer or inventor
+    'P112',   # founded by
+    'P138',   # named after
+    'P828',   # has cause
+    'P1478',  # has immediate cause
+    'P1479',  # has contributing factor
+})
+
+# Earliest relevant dates for an entity: DOB, inception, publication, etc.
+# Used as the target's "first existed" bound.
+TIME_TRAVEL_START_PROPS = frozenset({
+    'P569',   # date of birth
+    'P571',   # inception
+    'P575',   # time of discovery or invention
+    'P577',   # publication date
+    'P580',   # start time
+    'P585',   # point in time
+    'P606',   # first flight
+    'P729',   # service entry
+    'P1191',  # first performance
+    'P1249',  # time of earliest written record
+    'P1317',  # floruit
+    'P1319',  # earliest date
+    'P1619',  # date of official opening
+    'P2031',  # work period (start)
+    'P523',   # temporal range start
+})
+
+# End/latest dates: DOD, dissolution, discontinuation, etc. Combined with the
+# start props, this gives the subject's "last possible moment of influence".
+TIME_TRAVEL_END_PROPS = frozenset({
+    'P570',   # date of death
+    'P576',   # dissolved, abolished or demolished
+    'P582',   # end time
+    'P730',   # service retirement
+    'P1326',  # latest date
+    'P2032',  # work period (end)
+    'P2669',  # discontinued date
+    'P3999',  # date of official closure
+    'P524',   # temporal range end
+})
+
+TIME_TRAVEL_ALL_PROPS = TIME_TRAVEL_START_PROPS | TIME_TRAVEL_END_PROPS
+
+CLAIM_CREATE_OR_UPDATE = frozenset({
+    'wbcreateclaim-create', 'wbsetclaim-create', 'wbsetclaim-update',
+})
+
+# Wikidata time_value format: '+1952-03-11T00:00:00Z' or '-0044-03-15T00:00:00Z'
+WD_YEAR_RE = re.compile(r'^([+-])(\d+)-')
+
+
+def _parse_wd_year(time_value):
+    if not time_value:
+        return None
+    m = WD_YEAR_RE.match(time_value)
+    if not m:
+        return None
+    sign = -1 if m.group(1) == '-' else 1
+    return sign * int(m.group(2))
+
+
+def _years(rows, min_precision=9):
+    """rows: iterable of (time_value, precision). Skips precision < min
+    (decade/century) since those are too fuzzy for a year comparison."""
+    return [
+        y for tv, prec in rows
+        if prec is not None and prec >= min_precision
+        and (y := _parse_wd_year(tv)) is not None
+    ]
+
+
 def time_travel_edge(processed_event, logger=None, db_pool=None):
     """
-    Checks if an edit results in a causal claim pointing back in time.
+    Flags a claim create/update where a 'backward-causal' edge (P737 influenced
+    by, P170 creator, P144 based on, ...) points to a target whose earliest
+    known start date is AFTER the subject's — i.e. the subject is claimed to
+    be influenced/created/etc. by something that didn't yet exist.
     """
-    # what are we checking for here?  Nodes with dates linked to/from the edited one, I guess
-    pass
+    indicator_name = "time_travel_edge"
+    if not db_pool:
+        if logger:
+            logger.debug(f"{indicator_name}: db_pool not provided")
+        return None
+
+    src_qid = processed_event.get('title')
+    if not src_qid or not src_qid.startswith('Q'):
+        return None
+
+    parsed = parse_edit_comment(processed_event.get('comment', ''))
+    if parsed.get('action') not in CLAIM_CREATE_OR_UPDATE:
+        return None
+    pid = parsed.get('property_id')
+    if pid not in CAUSAL_BACKWARD:
+        return None
+    dst_qid = (parsed.get('details') or {}).get('claim_value_qid')
+    if not dst_qid:
+        return None
+
+    try:
+        with db_pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT qid, time_value, precision
+                  FROM wd_dates
+                 WHERE qid = ANY(%s)
+                   AND property = ANY(%s)
+                   AND source_property = ''
+                """,
+                ([src_qid, dst_qid], list(TIME_TRAVEL_ALL_PROPS)),
+            )
+            rows = cur.fetchall()
+    except Exception as e:
+        if logger:
+            logger.error(
+                f"{indicator_name} DB error for {src_qid}->{dst_qid}: {e}",
+                exc_info=True,
+            )
+        return None
+
+    # Subject upper bound: latest known date (DOD / end / etc., falling back
+    # to start dates when no end is recorded). Target lower bound: earliest
+    # known date. Using min over both start and end props on the target is
+    # safe — including end dates only widens its window backwards, never
+    # forwards, so it can only reduce false positives.
+    src_years = _years((tv, prec) for q, tv, prec in rows if q == src_qid)
+    dst_years = _years((tv, prec) for q, tv, prec in rows if q == dst_qid)
+
+    if not src_years or not dst_years:
+        return None
+    src_upper = max(src_years)
+    dst_lower = min(dst_years)
+    if dst_lower <= src_upper:
+        return None
+
+    if logger:
+        logger.info(
+            f"{indicator_name}: {src_qid} {pid} {dst_qid} "
+            f"(src_upper={src_upper}, dst_lower={dst_lower})"
+        )
+    return {
+        "indicator": indicator_name,
+        "src": src_qid,
+        "dst": dst_qid,
+        "property_id": pid,
+        "src_upper_year": src_upper,
+        "dst_lower_year": dst_lower,
+        "details": (
+            f"{src_qid} {pid} {dst_qid}: target first-seen year {dst_lower} "
+            f"is after subject last-seen year {src_upper}"
+        ),
+    }
+
+
+def _touched_properties(parsed_comment):
+    """Props mentioned by the edit: main claim prop + any [[Property:Pxx]]
+    links in the trailing manual comment (which is where qualifier-prop edits
+    and date-value claims surface Pxx)."""
+    touched = set()
+    pid = parsed_comment.get('property_id')
+    if pid:
+        touched.add(pid)
+    trailing = (parsed_comment.get('details') or {}).get('manual_comment_part', '')
+    for m in PROPERTY_LINK_RE.finditer(trailing):
+        touched.add(m.group(1).upper())
+    return touched
+
+
+# Matches [[Property:Pxx]]: <value-text> — lazy to next [[Property: or end.
+PROP_VALUE_RE = re.compile(
+    r'\[\[Property:(P\d+)\]\]:\s*(.*?)(?=\[\[Property:|\Z)',
+    re.IGNORECASE | re.DOTALL,
+)
+BCE_RE = re.compile(r'\b(?:BCE|BC|B\.C\.E?\.?)\b', re.IGNORECASE)
+# Standalone 1-4 digit integer (not part of a longer number).
+YEAR_TOKEN_RE = re.compile(r'(?<!\d)(\d{1,4})(?!\d)')
+
+
+def _parse_year_from_text(text):
+    """Best-effort year from a Wikidata-rendered date string like
+    'November 1 CE', '14 March 1879', '30 BCE'. Uses the largest 1-4 digit
+    integer in the text, negated if BCE/BC is mentioned."""
+    if not text:
+        return None
+    text = text.strip()
+    if not text or text.startswith('[['):  # QID value, not a date
+        return None
+    numbers = [int(n) for n in YEAR_TOKEN_RE.findall(text)]
+    if not numbers:
+        return None
+    year = max(numbers)
+    return -year if BCE_RE.search(text) else year
+
+
+def _stream_start_end_years(parsed_comment):
+    """{prop_id: year} for each [[Property:Pxx]]: <date-text> in trailing,
+    keeping only start/end props with parseable years."""
+    trailing = (parsed_comment.get('details') or {}).get('manual_comment_part', '')
+    if not trailing:
+        return {}
+    out = {}
+    for m in PROP_VALUE_RE.finditer(trailing):
+        pid = m.group(1).upper()
+        if pid not in START_END_PROPS:
+            continue
+        year = _parse_year_from_text(m.group(2))
+        if year is not None:
+            out[pid] = year
+    return out
+
+
+def end_before_beginning(processed_event, logger=None, db_pool=None):
+    """
+    Flags claim edits on start/end date properties where the item's current
+    wd_dates state contains an end that precedes a start within the same
+    statement-group (main dates share one group; qualifier dates group by
+    (source_property, source_target)).
+
+    Compares at year precision. Ignores rows with precision < 9 (decade or
+    coarser) to avoid spurious inversions from fuzzy dates.
+
+    To bridge the wd_dates snapshot lag, any [[Property:Pxx]]: <date-text>
+    in the trailing comment is parsed and treated as authoritative for that
+    prop in the main group — so an edit that introduces an inversion against
+    an existing stored date will fire on the same event, not next sync.
+    """
+    indicator_name = "end_before_beginning"
+    if not db_pool:
+        if logger:
+            logger.debug(f"{indicator_name}: db_pool not provided")
+        return None
+
+    qid = processed_event.get('title')
+    if not qid or not qid.startswith('Q'):
+        return None
+
+    parsed = parse_edit_comment(processed_event.get('comment', ''))
+    if parsed.get('action') not in CLAIM_CREATE_OR_UPDATE:
+        return None
+
+    touched = _touched_properties(parsed)
+    touched_start_end = touched & START_END_PROPS
+    if not touched_start_end:
+        return None
+
+    stream_years = _stream_start_end_years(parsed)
+
+    try:
+        with db_pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT property, time_value, precision,
+                       source_property, source_target
+                  FROM wd_dates
+                 WHERE qid = %s
+                   AND property = ANY(%s)
+                """,
+                (qid, list(START_END_PROPS)),
+            )
+            rows = cur.fetchall()
+    except Exception as e:
+        if logger:
+            logger.error(f"{indicator_name} DB error for {qid}: {e}", exc_info=True)
+        return None
+    if not rows and not stream_years:
+        return None
+
+    # Group by (source_property, source_target); each entry: (prop, year).
+    groups = {}
+    for prop, tv, prec, sp, st in rows:
+        if prec is None or prec < 9:
+            continue
+        year = _parse_wd_year(tv)
+        if year is None:
+            continue
+        groups.setdefault((sp, st), []).append((prop, year))
+
+    # Stream values supersede wd_dates for matching props in the main group.
+    if stream_years:
+        main = [(p, y) for (p, y) in groups.get(('', ''), []) if p not in stream_years]
+        main.extend(stream_years.items())
+        groups[('', '')] = main
+
+    inversions = []
+    for (sp, st), entries in groups.items():
+        start_years = [y for p, y in entries if p in START_PROPS]
+        end_years = [y for p, y in entries if p in END_PROPS]
+        if not start_years or not end_years:
+            continue
+        max_start = max(start_years)
+        min_end = min(end_years)
+        if min_end < max_start:
+            inversions.append({
+                'scope': 'main' if sp == '' else f'{sp}->{st}',
+                'start_year': max_start,
+                'end_year': min_end,
+            })
+
+    if not inversions:
+        return None
+
+    if logger:
+        logger.info(
+            f"{indicator_name}: {qid} touched {sorted(touched_start_end)}, "
+            f"{len(inversions)} inverted pair(s)"
+        )
+    return {
+        "indicator": indicator_name,
+        "qid": qid,
+        "touched": sorted(touched_start_end),
+        "inversions": inversions,
+        "details": (
+            f"{qid}: " + "; ".join(
+                f"{inv['scope']} end {inv['end_year']} < start {inv['start_year']}"
+                for inv in inversions
+            )
+        ),
+    }
+
 
 PROP_QID_TRAILING = re.compile(r'\[\[Property:(P\d+)\]\]:\s*\[\[(Q\d+)\]\]', re.IGNORECASE)
 
