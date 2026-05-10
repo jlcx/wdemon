@@ -197,6 +197,38 @@ def bad_description(processed_event, logger=None, db_pool=None, threshold=BAD_DE
         "details": f"{title}: score={round(total, 2)} ({breakdown})",
     }
 
+def constraint_check_candidate(processed_event, logger=None, db_pool=None):
+    """
+    Measurement-only Tier 1 indicator: returns a result on every edit where
+    a Wikidata wbcheckconstraints API call would be worth making — i.e., a
+    claim create/update on a Q-item. Used to size API call volume before
+    committing to a Tier 3 constraint-violation indicator.
+
+    Excludes claim removals (rare violation introducers) and non-Q pages
+    (Property:/Lexeme: have separate constraint surfaces). References
+    CLAIM_CREATE_OR_UPDATE defined in the Tier 2 section below — resolved
+    at call time, so forward order is fine.
+    """
+    indicator_name = "constraint_check_candidate"
+    qid = processed_event.get('title')
+    if not qid or not qid.startswith('Q'):
+        return None
+    parsed = parse_edit_comment(processed_event.get('comment', ''))
+    action = parsed.get('action')
+    if action not in CLAIM_CREATE_OR_UPDATE:
+        return None
+    pid = parsed.get('property_id')
+    has_qid_value = bool((parsed.get('details') or {}).get('claim_value_qid'))
+    return {
+        "indicator": indicator_name,
+        "qid": qid,
+        "property_id": pid,
+        "action": action,
+        "has_qid_value": has_qid_value,
+        "details": f"{qid} {action} {pid or '?'}",
+    }
+
+
 def dob_first_century(processed_event, logger=None, db_pool=None):
     """
     Flags edits that set date of birth (P569) to a first-century value (years 1-99 CE).
