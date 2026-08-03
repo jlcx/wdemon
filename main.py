@@ -2,6 +2,7 @@
 import csv
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 
@@ -35,6 +36,23 @@ ALL_INDICATORS = TIER1_INDICATORS + TIER2_INDICATORS + list(MEASUREMENT_INDICATO
 CONSTRAINT_LOG_PATH = "constraint_candidates.csv"
 CONSTRAINT_LOG_FIELDS = ("event_ts", "rc_id", "qid", "property_id", "action", "has_qid_value")
 
+# Wikidata entity namespaces: Item (0), Property (120), Lexeme (146),
+# EntitySchema (640). Everything else on wikidatawiki — project pages, talk,
+# user pages, and above all the bot-maintained Wikidata:Database reports/* —
+# is not an entity edit, and indicators without a title guard (e.g.
+# large_removal) fire spuriously on them.
+ENTITY_NAMESPACES = frozenset({0, 120, 146, 640})
+ENTITY_TITLE_RE = re.compile(r'^(Q\d+|Property:P\d+|Lexeme:L\d+|EntitySchema:E\d+)$')
+
+
+def is_entity_event(event):
+    """True if the event targets a Wikidata entity page. Falls back to the
+    title shape when the stream omits `namespace`."""
+    ns = event.get('namespace')
+    if ns is not None:
+        return ns in ENTITY_NAMESPACES
+    return bool(ENTITY_TITLE_RE.match(event.get('title') or ''))
+
 
 def _log_measurement(writer, event, result):
     ts = event.get('timestamp')
@@ -53,7 +71,8 @@ def _log_measurement(writer, event, result):
 
 def run_wikidata_monitor(db_pool=None, measurement_writer=None):
     """
-    Consumes the Wikimedia 'recentchange' stream and filters for Wikidata.
+    Consumes the Wikimedia 'recentchange' stream and filters for Wikidata
+    entity pages (see ENTITY_NAMESPACES; non-entity pages are skipped silently).
     Runs Tier 1 + Tier 2 indicators on every event and prints any that trigger.
     Measurement indicators (e.g. constraint_check_candidate) are written to
     `measurement_writer` instead of stdout/flagged_events.
@@ -68,6 +87,9 @@ def run_wikidata_monitor(db_pool=None, measurement_writer=None):
             pywikibot.output(">>> Connection established. Listening for changes...")
 
             for event in stream:
+                if not is_entity_event(event):
+                    continue
+
                 user = event.get('user', 'Unknown User')
                 title = event.get('title', 'Unknown Title')
                 comment = event.get('comment', 'No comment')
