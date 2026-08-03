@@ -5,6 +5,34 @@ import logging # Optional: for internal logging if needed
 
 logger = logging.getLogger(__name__) # Optional: get logger for this module
 
+# Wikibase joins the auto-summary value and the editor's own summary with ', '
+# (SummaryFormatter). Free-text values never contain wiki markup, so a comma
+# immediately followed by a [[link]] marks the seam. Values themselves may
+# contain commas ('wissenschaftlicher Artikel, 15. August 1991'), so splitting
+# on the first comma alone would truncate legitimate text.
+USER_SUMMARY_SEAM = re.compile(r',\s*(?=\[\[)')
+
+# Actions whose trailing text is a free-text value rather than a rendered claim.
+# Claim summaries join multiple '[[Property:Pxx]]: value' pairs with the same
+# separator, so the seam split must not be applied to them.
+FREE_TEXT_ACTIONS = ('wbsetdescription', 'wbsetlabel', 'wbsetaliases')
+
+
+def split_value_and_summary(trailing):
+    """
+    Splits '<value>, <user summary>' trailing text into (value, user_summary).
+
+    Only meaningful for FREE_TEXT_ACTIONS. Returns (trailing, None) when no
+    user summary is detectable.
+    """
+    if not trailing:
+        return '', None
+    m = USER_SUMMARY_SEAM.search(trailing)
+    if not m:
+        return trailing, None
+    return trailing[:m.start()].rstrip(), trailing[m.end():].strip() or None
+
+
 def parse_edit_comment(comment_string):
     """
     Parses a Wikidata edit comment string to extract structured information.
@@ -32,6 +60,11 @@ def parse_edit_comment(comment_string):
                   'tool_name' (str|None): Identified tool name (e.g., 'QuickStatements').
                   'raw_details' (str|None): Raw detail string from comment if specific parsing failed.
                   'manual_comment_part' (str|None): Text following the /* ... */ block.
+                  'value_part' (str|None): For label/description/alias actions,
+                                           the value with any appended editor
+                                           summary removed.
+                  'user_summary' (str|None): The editor summary stripped off
+                                             'value_part', if any.
                   'manual_comment' (str|None): The full comment if determined to be manual.
     """
     # Default return value for unknown/manual/empty comments
@@ -110,6 +143,13 @@ def parse_edit_comment(comment_string):
 
         if manual_part:
             result['details']['manual_comment_part'] = manual_part
+            if action_verb.startswith(FREE_TEXT_ACTIONS):
+                # Strip any editor/bot summary appended after the value, so
+                # consumers score the value alone.
+                value_part, user_summary = split_value_and_summary(manual_part)
+                result['details']['value_part'] = value_part
+                if user_summary:
+                    result['details']['user_summary'] = user_summary
             # NEW: Check if the manual part contains the [[Property:Pxx]]: [[Qyy]] pattern
             pq_match = prop_qid_trailing_match.search(manual_part)
             if pq_match:

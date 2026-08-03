@@ -118,9 +118,24 @@ def life_dates_changed(processed_event, logger=None, db_pool=None):
         return None
 
 BAD_DESC_ARTICLES = ('a ', 'an ', 'the ')
-BAD_DESC_AD_WORDS = ('Discover ', 'Enjoy ', 'Indulge ', 'Book ', 'Reserve ', 'Buy ', 'Get ', 'Hire ', 'SEO', 'AEO', 'marketing', 'marketer', 'consultant', 'sales', 'influencer', 'content creator')
-BAD_DESC_SUBJECTIVE = ('best', 'worst', 'good', 'bad ', 'terrible', 'horrible', 'beautiful', 'ugly', 'greatest', 'leading', 'premier', 'premium', 'finest')
-BAD_DESC_VERBS = ('is ', 'are', 'was ', 'were ')
+# Calls to action. These are adspeak only as commands, which in practice means
+# opening a sentence — mid-description they are ordinary nouns ('National Nature
+# Reserve in Wales', 'Book of Mormon character').
+BAD_DESC_AD_IMPERATIVES = ('discover', 'enjoy', 'indulge', 'book', 'reserve',
+                           'buy', 'get', 'hire')
+# A preposition right after the word marks it as a noun ('book by X',
+# 'reserve in Kenya') rather than a command ('Book now', 'Discover the magic').
+AD_NOUN_FOLLOWERS = ('by', 'of', 'in', 'from', 'at', 'on', 'about')
+# Promotional occupations/jargon, matched anywhere as whole words.
+BAD_DESC_AD_TERMS = ('marketing', 'marketer', 'consultant', 'influencer',
+                     'content creator')
+# Bare 'sales' collides with ordinary vocabulary in other languages (Spanish
+# 'sales' = salts, French = dirty), so require the promotional phrasing.
+BAD_DESC_AD_PHRASES = ('sales manager', 'sales representative', 'sales rep',
+                       'sales coach', 'sales expert', 'sales funnel',
+                       'sales training', 'sales professional')
+BAD_DESC_SUBJECTIVE = ('best', 'worst', 'good', 'bad', 'terrible', 'horrible', 'beautiful', 'ugly', 'greatest', 'leading', 'premier', 'premium', 'finest')
+BAD_DESC_VERBS = ('is', 'are', 'was', 'were')
 # First-word proper adjectives that legitimately start English descriptions.
 # Extend as needed; keep alphabetized for easy editing.
 PROPER_ADJECTIVES = frozenset({
@@ -130,9 +145,76 @@ PROPER_ADJECTIVES = frozenset({
     'Japanese', 'Korean', 'Mexican', 'Nigerian', 'Norwegian', 'Polish',
     'Russian', 'Scottish', 'Spanish', 'Swedish', 'Turkish', 'Welsh',
 })
+# Proper nouns that routinely open an otherwise well-formed description.
+PROPER_NOUN_STARTERS = frozenset({
+    'Commons', 'Wikibooks', 'Wikidata', 'Wikimedia', 'Wikinews', 'Wikipedia',
+    'Wikiquote', 'Wikisource', 'Wikivoyage', 'Wiktionary',
+})
+# Languages that capitalize every noun, so a capitalized first word carries no
+# signal. Mostly German and its relatives.
+NOUN_CAPITALIZING_LANGS = frozenset({
+    'als', 'bar', 'de', 'de-at', 'de-ch', 'gsw', 'ksh', 'lb', 'nds', 'nds-nl',
+    'pdc', 'pfl', 'stq', 'vmf',
+})
+
+
+def _word_pattern(words):
+    """Whole-word alternation, so 'are' no longer matches inside 'area'."""
+    return re.compile(r'\b(?:%s)\b' % '|'.join(re.escape(w) for w in words),
+                      re.IGNORECASE)
+
+
+BAD_DESC_VERB_RE = _word_pattern(BAD_DESC_VERBS)
+BAD_DESC_SUBJECTIVE_RE = _word_pattern(BAD_DESC_SUBJECTIVE)
+BAD_DESC_AD_TERM_RE = _word_pattern(BAD_DESC_AD_TERMS + BAD_DESC_AD_PHRASES)
+# Acronyms stay case-sensitive so 'Seoul' and the surname 'Seo' don't match.
+BAD_DESC_AD_ACRONYM_RE = re.compile(r'\b(?:SEO|AEO)\b')
+# An imperative at the start of the description or of a later sentence, not
+# followed by a preposition.
+BAD_DESC_AD_IMPERATIVE_RE = re.compile(
+    r'(?:^|[.!?]\s+)(?:%s)\s+(?!(?:%s)\b)' % (
+        '|'.join(BAD_DESC_AD_IMPERATIVES),
+        '|'.join(AD_NOUN_FOLLOWERS),
+    ),
+    re.IGNORECASE,
+)
+# 'premier' names offices and competitions far more often than it advertises.
+PREMIER_LEGIT_RE = re.compile(r'\bpremier\s+(?:league|of|minister)\b', re.IGNORECASE)
+
 
 def _first_word(desc):
-    return desc.split(' ', 1)[0] if desc else ''
+    word = desc.split(' ', 1)[0] if desc else ''
+    return word.strip(string.punctuation)
+
+
+def _proper_start(desc):
+    """True when the first word is capitalized for a reason other than style:
+    a proper adjective, a known proper noun, or an acronym like 'NASA'."""
+    word = _first_word(desc)
+    return (word in PROPER_ADJECTIVES
+            or word in PROPER_NOUN_STARTERS
+            or (len(word) > 1 and word.isupper()))
+
+
+def _ad_language_score(desc):
+    """Marketing language: a call to action opening a sentence, promotional
+    jargon, or an SEO-style acronym."""
+    if (BAD_DESC_AD_IMPERATIVE_RE.search(desc)
+            or BAD_DESC_AD_TERM_RE.search(desc)
+            or BAD_DESC_AD_ACRONYM_RE.search(desc)):
+        return 1.0
+    return 0.0
+
+
+def _subjective_score(desc):
+    """Subjective wording, ignoring capitalized hits — 'Bad Bunny', 'Premier
+    League' and 'Greatest Hits' are names, while genuine puffery ('the best
+    dentist') is written lowercase mid-description."""
+    hits = {m.group(0) for m in BAD_DESC_SUBJECTIVE_RE.finditer(desc)
+            if m.group(0)[0].islower()}
+    if 'premier' in hits and PREMIER_LEGIT_RE.search(desc):
+        hits.discard('premier')
+    return 1.0 if hits else 0.0
 
 def _balanced_trailing_paren(desc):
     return desc.endswith(')') and desc.count('(') == desc.count(')')
@@ -142,16 +224,23 @@ def _len_score(desc):
 
 # Each rule: score(desc) -> float (0 = no fire), optional suppress_if(desc) -> bool.
 # Weights are independent; total >= threshold triggers the indicator.
+# Optional "langs" limits a rule to those language codes; "skip_langs" excludes
+# them. Both exist because some rules encode English-specific conventions and
+# would otherwise fire on ordinary words in other languages.
 BAD_DESC_RULES = [
     {"name": "too_long",              "score": _len_score},
     {"name": "starts_capitalized",    "score": lambda d: 1.0 if d and d[0].isupper() else 0.0,
-                                      "suppress_if": lambda d: _first_word(d) in PROPER_ADJECTIVES},
+                                      "suppress_if": _proper_start,
+                                      "skip_langs": NOUN_CAPITALIZING_LANGS},
     {"name": "ends_with_punctuation", "score": lambda d: 1.0 if d and d[-1] in string.punctuation else 0.0,
                                       "suppress_if": _balanced_trailing_paren},
-    {"name": "starts_with_article",   "score": lambda d: 1.0 if d.lower().startswith(BAD_DESC_ARTICLES) else 0.0},
-    {"name": "ad_language",           "score": lambda d: 1.0 if any(w in d for w in BAD_DESC_AD_WORDS) else 0.0},
-    {"name": "subjective",            "score": lambda d: 1.0 if any(w in d for w in BAD_DESC_SUBJECTIVE) else 0.0},
-    {"name": "verb",                  "score": lambda d: 1.0 if any(w in d for w in BAD_DESC_VERBS) else 0.0},
+    {"name": "starts_with_article",   "score": lambda d: 1.0 if d.lower().startswith(BAD_DESC_ARTICLES) else 0.0,
+                                      "langs": frozenset({'en'})},
+    {"name": "ad_language",           "score": _ad_language_score},
+    {"name": "subjective",            "score": _subjective_score,
+                                      "langs": frozenset({'en'})},
+    {"name": "verb",                  "score": lambda d: 1.0 if BAD_DESC_VERB_RE.search(d) else 0.0,
+                                      "langs": frozenset({'en'})},
     {"name": "contains_trademark",    "score": lambda d: 1.0 if ('\u00ae' in d or '\u2122' in d) else 0.0},
     {"name": "double_space",          "score": lambda d: 0.5 if '  ' in d else 0.0},
     {"name": "space_before_comma",    "score": lambda d: 0.5 if ' ,' in d else 0.0},
@@ -162,19 +251,29 @@ BAD_DESC_THRESHOLD = 2.0
 def bad_description(processed_event, logger=None, db_pool=None, threshold=BAD_DESC_THRESHOLD):
     """
     Flags description edits whose weighted score across BAD_DESC_RULES reaches
-    `threshold`. Each rule contributes a float; some have suppress_if exceptions.
+    `threshold`. Each rule contributes a float; some have suppress_if exceptions
+    and some apply only to certain languages.
     """
     indicator_name = "bad_description"
     parsed_comment = parse_edit_comment(processed_event.get('comment', ''))
     if not parsed_comment.get('action', '').startswith('wbsetdescription'):
         return None
-    desc = parsed_comment.get('details', {}).get('manual_comment_part', '')
+    details = parsed_comment.get('details') or {}
+    # value_part excludes any bot/editor summary Wikibase appended after the
+    # description; fall back for comments where no split was attempted.
+    desc = details.get('value_part') or details.get('manual_comment_part', '')
     if not desc:
         return None
 
+    lang = parsed_comment.get('language')
     issues = []
     total = 0.0
     for rule in BAD_DESC_RULES:
+        only_langs = rule.get('langs')
+        if only_langs and lang not in only_langs:
+            continue
+        if lang in rule.get('skip_langs', ()):
+            continue
         suppress = rule.get('suppress_if')
         if suppress and suppress(desc):
             continue
@@ -702,7 +801,8 @@ def labels_less_consistent(processed_event, logger=None, db_pool=None, consensus
         return None
 
     lang = parsed.get('language')
-    new_label = (parsed.get('details') or {}).get('manual_comment_part', '')
+    label_details = parsed.get('details') or {}
+    new_label = label_details.get('value_part') or label_details.get('manual_comment_part', '')
     if not lang or not new_label:
         return None
     new_norm = new_label.strip().casefold()
