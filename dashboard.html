@@ -346,11 +346,19 @@ function sortRows(rows) {
 /* ---------- fetch / live update ---------- */
 
 let pollTimer = null;
+let fetchController = null;
 
 async function fetchRows({ showRefetch = false } = {}) {
+  // Supersede any in-flight request so a slow, stale response can't land
+  // after this one and overwrite newer data.
+  if (fetchController) fetchController.abort();
+  const controller = new AbortController();
+  fetchController = controller;
+
   if (showRefetch) document.getElementById("app").classList.add("refetching");
   try {
-    const resp = await fetch(`/api/flags?since_hours=${state.sinceHours}`);
+    const resp = await fetch(`/api/flags?since_hours=${state.sinceHours}`,
+                             { signal: controller.signal });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
 
@@ -365,11 +373,14 @@ async function fetchRows({ showRefetch = false } = {}) {
     state.truncated = data.truncated;
     state.lastFetchOk = new Date();
     render();
+    renderLive(true);
   } catch (e) {
-    state.lastFetchOk = state.lastFetchOk;  // keep last-good timestamp
+    if (e.name === "AbortError") return;   // superseded by a newer request
     renderLive(false);
   } finally {
-    document.getElementById("app").classList.remove("refetching");
+    if (fetchController === controller) {
+      document.getElementById("app").classList.remove("refetching");
+    }
   }
 }
 
@@ -527,8 +538,10 @@ function renderHead() {
         if (state.sort.key === col.key) {
           state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
         } else {
-          state.sort = { key: col.key, dir: col.key === "time" ? "desc" : "asc" };
-          if (col.key === "score") state.sort.dir = "desc";
+          state.sort = {
+            key: col.key,
+            dir: (col.key === "time" || col.key === "score") ? "desc" : "asc",
+          };
         }
         render();
       });
@@ -603,7 +616,7 @@ function renderTable() {
   const note = document.getElementById("table-note");
   const bits = [];
   if (rows.length > shown.length) {
-    bits.push(`showing newest ${shown.length.toLocaleString()} of ${rows.length.toLocaleString()} matching flags`);
+    bits.push(`showing first ${shown.length.toLocaleString()} of ${rows.length.toLocaleString()} matching flags`);
   } else {
     bits.push(`${rows.length.toLocaleString()} flag${rows.length === 1 ? "" : "s"}`);
   }
@@ -612,10 +625,12 @@ function renderTable() {
 }
 
 function render() {
-  renderLive(true);
   renderTiles();
   renderBars();
   renderTable();
+  // Fresh-row highlight is consumed by this render; clear it so filter/sort
+  // re-renders before the next poll don't replay the animation.
+  state.freshIds = new Set();
 }
 
 /* ---------- filter controls ---------- */
