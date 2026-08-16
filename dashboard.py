@@ -13,10 +13,12 @@ Usage:
 import argparse
 from pathlib import Path
 
-from fastapi import FastAPI, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
+
+from recheck import DEFAULT_MAX_ROWS, recheck_flags
 
 DB_CONNINFO = "dbname=algae"
 HTML_PATH = Path(__file__).parent / "dashboard.html"
@@ -75,6 +77,26 @@ def flags(
             if r[k] is not None:
                 r[k] = r[k].isoformat()
     return {"rows": rows, "truncated": len(rows) >= limit}
+
+
+@app.post("/api/recheck")
+def recheck(payload: dict = Body(default={})):
+    """
+    Recheck active flags against the live Wikidata API (see recheck.py) and
+    stamp reverted_at / corrected_at on rows whose issue is gone. Optional
+    body {"ids": [...]} restricts the recheck; otherwise the newest
+    DEFAULT_MAX_ROWS active flags are checked.
+    """
+    ids = payload.get("ids")
+    if ids is not None:
+        if (not isinstance(ids, list) or len(ids) > DEFAULT_MAX_ROWS
+                or not all(isinstance(i, int) for i in ids)):
+            raise HTTPException(status_code=422,
+                                detail=f"ids must be a list of at most "
+                                       f"{DEFAULT_MAX_ROWS} integers")
+        if not ids:
+            return {"checked": 0, "reverted": [], "corrected": [], "api_errors": 0}
+    return recheck_flags(pool, ids=ids)
 
 
 if __name__ == "__main__":

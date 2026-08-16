@@ -65,9 +65,6 @@ def record_flag(db_pool, event, indicator_name, result):
         )
 
 
-REVERT_TAGS = frozenset({'mw-undo', 'mw-manual-revert', 'mw-rollback'})
-
-
 def mark_corrections(db_pool, event, fired_indicators):
     """
     For indicators whose domain matches this event's action but which did NOT
@@ -138,19 +135,22 @@ def mark_corrections(db_pool, event, fired_indicators):
 
 def mark_reverts(db_pool, event):
     """
-    If `event` looks like an undo/revert, mark matching flagged_events rows as
-    reverted and return the total rowcount across strategies. Returns 0 on no
-    match, error, or non-revert events.
+    If `event` looks like an undo/restore/revert, mark matching flagged_events
+    rows as reverted and return the total rowcount across strategies. Returns 0
+    on no match, error, or non-revert events.
+
+    Note: the recentchange stream carries no `tags` field, so detection relies
+    entirely on the edit comment. All three forms below are produced verbatim
+    by MediaWiki/Wikibase; undo and restore are language-independent.
 
     Strategies (combined; a row reverted_at by one is skipped by the next):
-      1. Specific revision match. The revision being reverted-away-from is:
-         - details['undone_rev_id'] when the comment parses as 'Undo revision N';
-         - otherwise event['revision']['old'] when any tag in REVERT_TAGS is set
-           (covers mw-undo / mw-manual-revert / mw-rollback without a parseable
-           comment, and non-English revert comments).
-         UPDATEs rows where revision_new = that revision.
-      2. Mass-rollback by user. When the comment parses as 'Reverted edits by X'
-         (typically co-occurs with mw-rollback), UPDATE rows matching
+      1. Undo: '/* undo:0||<rev>|<user> */' (or English 'Undo revision N')
+         names the exact revision being undone. UPDATEs rows where
+         revision_new = that revision.
+      2. Restore: '/* restore:0||<rev>|<user> */' restores the item to <rev>,
+         wiping every later revision. UPDATEs rows on the same item where
+         revision_new > <rev> (revision ids are monotonic).
+      3. Mass-rollback by user: 'Reverted edits by X'. UPDATEs rows matching
          (item_qid, event_user) within REVERT_LOOKBACK.
     """
     if not db_pool:
@@ -159,14 +159,11 @@ def mark_reverts(db_pool, event):
     parsed = parse_edit_comment(event.get('comment', ''))
     action = parsed.get('action')
     details = parsed.get('details') or {}
-    tags = event.get('tags') or ()
-    has_revert_tag = any(t in REVERT_TAGS for t in tags)
 
     undone_rev = details.get('undone_rev_id') if action == 'undo' else None
-    if undone_rev is None and has_revert_tag:
-        undone_rev = (event.get('revision') or {}).get('old')
+    restored_rev = details.get('restored_rev_id') if action == 'restore' else None
 
-    if undone_rev is None and action != 'revert':
+    if undone_rev is None and restored_rev is None and action != 'revert':
         return 0
 
     total = 0
@@ -180,6 +177,18 @@ def mark_reverts(db_pool, event):
                      WHERE revision_new = %s AND reverted_at IS NULL
                     """,
                     (undone_rev,),
+                )
+                total += cur.rowcount
+            if restored_rev is not None and event.get('title'):
+                cur.execute(
+                    """
+                    UPDATE flagged_events
+                       SET reverted_at = NOW()
+                     WHERE item_qid = %s
+                       AND revision_new > %s
+                       AND reverted_at IS NULL
+                    """,
+                    (event['title'], restored_rev),
                 )
                 total += cur.rowcount
             if action == 'revert':

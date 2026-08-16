@@ -248,6 +248,30 @@ BAD_DESC_RULES = [
 ]
 BAD_DESC_THRESHOLD = 2.0
 
+def score_description(desc, lang):
+    """
+    Scores a description string against BAD_DESC_RULES for `lang`.
+    Returns (total, issues) where issues is a list of {"name", "score"} dicts.
+    Also used by recheck.py to test whether a flagged description is still bad.
+    """
+    issues = []
+    total = 0.0
+    for rule in BAD_DESC_RULES:
+        only_langs = rule.get('langs')
+        if only_langs and lang not in only_langs:
+            continue
+        if lang in rule.get('skip_langs', ()):
+            continue
+        suppress = rule.get('suppress_if')
+        if suppress and suppress(desc):
+            continue
+        s = rule['score'](desc)
+        if s > 0:
+            issues.append({"name": rule['name'], "score": round(s, 2)})
+            total += s
+    return total, issues
+
+
 def bad_description(processed_event, logger=None, db_pool=None, threshold=BAD_DESC_THRESHOLD):
     """
     Flags description edits whose weighted score across BAD_DESC_RULES reaches
@@ -266,21 +290,7 @@ def bad_description(processed_event, logger=None, db_pool=None, threshold=BAD_DE
         return None
 
     lang = parsed_comment.get('language')
-    issues = []
-    total = 0.0
-    for rule in BAD_DESC_RULES:
-        only_langs = rule.get('langs')
-        if only_langs and lang not in only_langs:
-            continue
-        if lang in rule.get('skip_langs', ()):
-            continue
-        suppress = rule.get('suppress_if')
-        if suppress and suppress(desc):
-            continue
-        s = rule['score'](desc)
-        if s > 0:
-            issues.append({"name": rule['name'], "score": round(s, 2)})
-            total += s
+    total, issues = score_description(desc, lang)
 
     if total < threshold:
         return None

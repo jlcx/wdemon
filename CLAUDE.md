@@ -22,7 +22,12 @@ python dashboard.py [--host 127.0.0.1] [--port 8000]
 
 ### Entry points
 - **`main.py`** — Minimal monitor using `pywikibot.comms.eventstreams.EventStreams`. Connects, filters for `wikidatawiki`, and prints each change. Auto-restarts on disconnect.
-- **`dashboard.py`** — FastAPI web dashboard over `flagged_events`. Serves `dashboard.html` (single-file vanilla-JS frontend) plus `GET /api/flags?since_hours=&limit=` which returns a time-window slice with `score` extracted from `indicator_details->>'score'`. The client polls every 5 s and does all indicator/user/score/status filtering and sorting locally; stat tiles are the status filter, the per-indicator bars are the indicator filter.
+- **`dashboard.py`** — FastAPI web dashboard over `flagged_events`. Serves `dashboard.html` (single-file vanilla-JS frontend) plus `GET /api/flags?since_hours=&limit=` which returns a time-window slice with `score` extracted from `indicator_details->>'score'`, and `POST /api/recheck` (optional body `{"ids": [...]}`) which runs `recheck.recheck_flags`. The client polls every 5 s and does all indicator/user/score/status filtering and sorting locally; stat tiles are the status filter, the per-indicator bars are the indicator filter. A "Recheck active" button (and clicking a row's "active" chip) triggers the API recheck.
+
+### Revert/correction tracking
+Two complementary mechanisms resolve flags:
+- **Stream-side** (`db.py`): `mark_reverts` parses edit comments — the recentchange stream has **no `tags` field**, so comment parsing is the only stream-side signal. Handled shapes: standard `/* undo:0||<rev>|<user> */` and `/* restore:0||<rev>|<user> */` summaries (language-independent; restore reverts all rows on the item with `revision_new` > the restored-to revision) and English rollback "Reverted edits by [[Special:Contributions/X|X]]". `mark_corrections` watches same-slot non-flagging edits for `bad_description` / `labels_less_consistent`.
+- **API recheck** (`recheck.py`): batched Wikidata API checks for flags the stream missed (monitor downtime, unusual edit paths). Revert check: `mw-reverted` tag on `revision_new` (`prop=revisions`, 50/request; deleted revisions also count). Term check: refetches current label/description and marks `corrected_at` if the flagged issue is gone (`labels_less_consistent`: current label ≠ flagged bad label; `bad_description`: re-score via `indicators.score_description` below threshold).
 
 ### Indicator system (`indicators.py`)
 Indicators are functions that accept a processed event dict and return either `None` (not triggered) or a dict describing the flag. They are organized in tiers by what they need:

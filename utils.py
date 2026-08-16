@@ -87,6 +87,12 @@ def parse_edit_comment(comment_string):
     remove_claim_match = re.match(r'/\* (wbremoveclaims-remove):(\d+)\|([P]\d+) \*/', comment_string, re.IGNORECASE)
     alias_match = re.match(r'/\* (wbsetaliases-\w+):(\d+)\|([a-z-]+)(?:\|(.*))? \*/', comment_string, re.IGNORECASE)
     sitelink_match = re.match(r'/\* (wbsetsitelink-\w+):(\d+)\|([a-z_]+wiki) \*/', comment_string, re.IGNORECASE)
+    # Standard undo/restore summaries carry the revision id and the username in
+    # the details: /* undo:0||2530834010|Prof.MarianoDaRosa */ free text
+    #              /* restore:0||2528972004|Yirba */ free text
+    # Usernames may contain characters (dots, spaces, unicode) that the general
+    # std_comment pattern below rejects, so match these before it.
+    undo_restore_match = re.match(r'/\* (undo|restore):([^*]*?) \*/', comment_string)
     # General standard comment pattern (catches the /* action:details */ part and any following text)
     std_comment_match = re.match(r'/\* ([-a-z0-9|:]+?) \*/(.*)', comment_string, re.IGNORECASE)
     # Pattern to extract Property and QID from the trailing part like "[[Property:Pxx]]: [[Qyy]]"
@@ -94,6 +100,12 @@ def parse_edit_comment(comment_string):
 
     # --- Patterns for Revert/Undo ---
     undo_match = re.match(r'Undo revision (\d+)', comment_string)
+    # Rollback summaries link the reverted user: "Reverted edits by
+    # [[Special:Contributions/Name With Spaces|Name With Spaces]] ...".
+    # Capture the bare username from inside the link; fall back to the plain
+    # form for non-linked variants.
+    revert_link_match = re.match(
+        r'Reverted edits by \[\[Special:Contributions/([^|\]]+)', comment_string)
     revert_match = re.match(r'Reverted edits by ([^ ]+)', comment_string)
 
     # --- Patterns for Tools ---
@@ -127,6 +139,20 @@ def parse_edit_comment(comment_string):
          is_standard = True
          result['action'] = sitelink_match.group(1).lower()
          result['details']['sitelink_site'] = sitelink_match.group(3).lower()
+    elif undo_restore_match:
+        # /* undo:0||<rev>|<user> */ -> revision being undone
+        # /* restore:0||<rev>|<user> */ -> revision being restored TO
+        # (first field is a counter, so scan the remaining fields for the id).
+        is_standard = True
+        action_verb = undo_restore_match.group(1)
+        raw_details = undo_restore_match.group(2)
+        result['action'] = action_verb
+        result['details']['raw_details'] = raw_details
+        rev_candidate = next(
+            (p for p in raw_details.split('|')[1:] if p.isdigit()), None)
+        if rev_candidate:
+            key = 'undone_rev_id' if action_verb == 'undo' else 'restored_rev_id'
+            result['details'][key] = int(rev_candidate)
     elif std_comment_match:
         # General pattern /* action:details */ maybe followed by more text
         is_standard = True
@@ -183,6 +209,10 @@ def parse_edit_comment(comment_string):
             result['details']['undone_rev_id'] = int(undo_match.group(1))
         except ValueError:
             logger.warning(f"Could not parse revision ID from undo comment: {comment_string}")
+    elif revert_link_match:
+         is_standard = False # Treat as semi-standard/manual action
+         result['action'] = 'revert'
+         result['details']['reverted_user'] = revert_link_match.group(1).strip()
     elif revert_match:
          is_standard = False # Treat as semi-standard/manual action
          result['action'] = 'revert'

@@ -141,6 +141,17 @@
     font-size: 13px; font-weight: 600; margin: 0 0 10px;
     color: var(--text-secondary); text-transform: uppercase; letter-spacing: .04em;
   }
+  .card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .card-head h2 { margin: 0; }
+  .mini-btn {
+    font: inherit; font-size: 12px; color: var(--text-secondary);
+    background: none; border: 1px solid var(--baseline);
+    border-radius: 6px; padding: 3px 9px; cursor: pointer; white-space: nowrap;
+  }
+  .mini-btn:hover:not(:disabled) { color: var(--text-primary); border-color: var(--text-muted); }
+  .mini-btn:disabled { opacity: 0.5; cursor: default; }
+  .chip.recheckable { cursor: pointer; }
+  .chip.recheckable:hover { color: var(--text-primary); text-decoration: underline; }
 
   /* ---- indicator bars (clickable filter) ---- */
   .bars { display: grid; grid-template-columns: 200px 1fr 56px; gap: 6px 10px; align-items: center; }
@@ -254,7 +265,14 @@
   </div>
 
   <div class="card">
-    <h2 id="table-title">Flagged events</h2>
+    <div class="card-head">
+      <h2 id="table-title">Flagged events</h2>
+      <button class="mini-btn" id="recheck-btn" type="button"
+              title="Query the Wikidata API to see whether the flagged issues are still present">
+        Recheck active
+      </button>
+      <span class="footnote" id="recheck-msg" style="margin-top:0"></span>
+    </div>
     <div class="table-scroll">
       <table>
         <thead><tr id="thead-row"></tr></thead>
@@ -596,8 +614,14 @@ function renderTable() {
     const chip = el("span", "chip");
     chip.append(el("span", "sdot " + (st === "active" ? "active" : "resolved")));
     chip.append(document.createTextNode(st));
-    const when = r.reverted_at || r.corrected_at;
-    if (when) chip.title = `${st} at ${fmtTime(when)} UTC`;
+    if (st === "active") {
+      chip.classList.add("recheckable");
+      chip.title = "recheck this flag against the live API";
+      chip.addEventListener("click", () => recheckIds([r.id]));
+    } else {
+      const when = r.reverted_at || r.corrected_at;
+      if (when) chip.title = `${st} at ${fmtTime(when)} UTC`;
+    }
     tdStatus.append(chip);
     tr.append(tdStatus);
 
@@ -657,6 +681,48 @@ document.getElementById("f-clear").addEventListener("click", () => {
   document.getElementById("f-user").value = "";
   document.getElementById("f-score").value = "";
   render();
+});
+
+/* ---------- API recheck ---------- */
+
+const RECHECK_CAP = 500;   // matches the server's DEFAULT_MAX_ROWS
+
+async function recheckIds(ids) {
+  const btn = document.getElementById("recheck-btn");
+  const msg = document.getElementById("recheck-msg");
+  btn.disabled = true;
+  msg.textContent = `rechecking ${ids.length} flag${ids.length === 1 ? "" : "s"}…`;
+  try {
+    const resp = await fetch("/api/recheck", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const res = await resp.json();
+    const bits = [`rechecked ${res.checked}`,
+                  `${res.reverted.length} reverted`,
+                  `${res.corrected.length} corrected`];
+    if (res.api_errors) bits.push(`${res.api_errors} API error(s)`);
+    msg.textContent = bits.join(" · ");
+    fetchRows();
+  } catch (e) {
+    msg.textContent = "recheck failed — is the server up?";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById("recheck-btn").addEventListener("click", () => {
+  const ids = filteredRows()
+    .filter(r => rowStatus(r) === "active")
+    .map(r => r.id)
+    .slice(0, RECHECK_CAP);
+  if (!ids.length) {
+    document.getElementById("recheck-msg").textContent = "no active flags in view";
+    return;
+  }
+  recheckIds(ids);
 });
 
 /* ---------- theme toggle: auto → light → dark ---------- */
