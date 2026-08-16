@@ -12,12 +12,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Simple monitor — prints all Wikidata changes to stdout
 python main.py
 
+# Web dashboard over flagged_events (live-updating)
+python dashboard.py [--host 127.0.0.1] [--port 8000]
+```
+
 `main.py` requires a pywikibot `user-config.py` in the same directory.
 
 ## Architecture
 
 ### Entry points
 - **`main.py`** — Minimal monitor using `pywikibot.comms.eventstreams.EventStreams`. Connects, filters for `wikidatawiki`, and prints each change. Auto-restarts on disconnect.
+- **`dashboard.py`** — FastAPI web dashboard over `flagged_events`. Serves `dashboard.html` (single-file vanilla-JS frontend) plus `GET /api/flags?since_hours=&limit=` which returns a time-window slice with `score` extracted from `indicator_details->>'score'`. The client polls every 5 s and does all indicator/user/score/status filtering and sorting locally; stat tiles are the status filter, the per-indicator bars are the indicator filter.
 
 ### Indicator system (`indicators.py`)
 Indicators are functions that accept a processed event dict and return either `None` (not triggered) or a dict describing the flag. They are organized in tiers by what they need:

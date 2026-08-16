@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wdemon dashboard</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:           #f9f9f7;
+    --surface-1:      #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;
+    --series-1-track: rgba(42,120,214,0.10);
+    --fresh-wash:     rgba(42,120,214,0.16);
+    --status-good:    #0ca30c;
+    --status-serious: #ec835a;
+    --link:           #1c5cab;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page:           #0d0d0d;
+      --surface-1:      #1a1a19;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --series-1-track: rgba(57,135,229,0.14);
+      --fresh-wash:     rgba(57,135,229,0.22);
+      --link:           #86b6ef;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:           #0d0d0d;
+    --surface-1:      #1a1a19;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+    --series-1-track: rgba(57,135,229,0.14);
+    --fresh-wash:     rgba(57,135,229,0.22);
+    --link:           #86b6ef;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 20px 24px 48px; }
+
+  header {
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  header h1 { font-size: 20px; margin: 0; font-weight: 650; }
+  header .sub { color: var(--text-secondary); }
+  header .spacer { flex: 1; }
+  .live {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--text-secondary); font-size: 13px;
+  }
+  .live .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--status-good);
+  }
+  .live.stale .dot { background: var(--status-serious); }
+  .theme-btn {
+    font: inherit; font-size: 13px; color: var(--text-secondary);
+    background: var(--surface-1); border: 1px solid var(--baseline);
+    border-radius: 6px; padding: 4px 10px; cursor: pointer; white-space: nowrap;
+  }
+  .theme-btn:hover { color: var(--text-primary); border-color: var(--text-muted); }
+
+  /* ---- filter row ---- */
+  .filters {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .filters label {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--text-secondary); font-size: 13px;
+  }
+  .filters select, .filters input {
+    font: inherit; color: var(--text-primary);
+    background: var(--surface-1);
+    border: 1px solid var(--baseline); border-radius: 6px;
+    padding: 5px 8px;
+  }
+  .filters input[type=text] { width: 160px; }
+  .filters input[type=number] { width: 80px; }
+  .filters button {
+    font: inherit; color: var(--text-secondary);
+    background: none; border: 1px solid var(--baseline);
+    border-radius: 6px; padding: 5px 10px; cursor: pointer;
+  }
+  .filters button:hover { color: var(--text-primary); border-color: var(--text-muted); }
+
+  /* ---- stat tiles (also the status filter) ---- */
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  .tile {
+    background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 16px; text-align: left; cursor: pointer;
+    font: inherit; color: inherit;
+  }
+  .tile:hover { border-color: var(--text-muted); }
+  .tile.selected { border-color: var(--series-1); box-shadow: inset 0 0 0 1px var(--series-1); }
+  .tile .value { font-size: 26px; font-weight: 650; }
+  .tile .label {
+    color: var(--text-secondary); font-size: 13px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .tile .label .sdot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+
+  /* ---- cards ---- */
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  .card h2 {
+    font-size: 13px; font-weight: 600; margin: 0 0 10px;
+    color: var(--text-secondary); text-transform: uppercase; letter-spacing: .04em;
+  }
+
+  /* ---- indicator bars (clickable filter) ---- */
+  .bars { display: grid; grid-template-columns: 200px 1fr 56px; gap: 6px 10px; align-items: center; }
+  .bar-row { display: contents; cursor: pointer; }
+  .bar-row .name {
+    font-size: 13px; color: var(--text-primary);
+    text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .bar-row .track {
+    height: 14px; background: var(--series-1-track); border-radius: 0 4px 4px 0;
+    position: relative;
+  }
+  .bar-row .fill {
+    position: absolute; inset: 0 auto 0 0;
+    background: var(--series-1); border-radius: 0 4px 4px 0;
+    min-width: 2px;
+  }
+  .bar-row .count {
+    font-size: 13px; color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+  .bar-row:hover .name { color: var(--link); }
+  .bar-row:hover .fill { filter: brightness(1.15); }
+  .bar-row.dimmed .fill { opacity: 0.35; }
+  .bar-row.dimmed .name, .bar-row.dimmed .count { color: var(--text-muted); }
+  .bar-row.selected .name { font-weight: 650; }
+  .bars:focus-visible { outline: 2px solid var(--series-1); }
+
+  /* ---- table ---- */
+  .table-scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  thead th {
+    position: sticky; top: 0; background: var(--surface-1);
+    text-align: left; font-size: 12px; font-weight: 600;
+    color: var(--text-secondary); text-transform: uppercase; letter-spacing: .03em;
+    padding: 6px 10px; border-bottom: 1px solid var(--baseline);
+    white-space: nowrap; cursor: pointer; user-select: none;
+  }
+  thead th.nosort { cursor: default; }
+  thead th .arrow { color: var(--series-1); }
+  tbody td {
+    padding: 6px 10px; border-bottom: 1px solid var(--gridline);
+    vertical-align: top;
+  }
+  tbody tr.fresh { animation: freshwash 6s ease-out; }
+  @keyframes freshwash {
+    0%, 40% { background: var(--fresh-wash); }
+    100%    { background: transparent; }
+  }
+  td.t-time  { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+  td.t-score { text-align: right; font-variant-numeric: tabular-nums; }
+  th.t-score { text-align: right; }
+  td.t-ind   { white-space: nowrap; }
+  td.t-item, td.t-diff { white-space: nowrap; }
+  td.t-details { color: var(--text-secondary); max-width: 420px; overflow-wrap: break-word; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+    font-size: 13px; color: var(--text-secondary);
+  }
+  .chip .sdot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .sdot.active    { background: var(--status-serious); }
+  .sdot.resolved  { background: var(--status-good); }
+  .sdot.all       { background: var(--text-muted); }
+
+  .footnote { color: var(--text-muted); font-size: 13px; margin-top: 8px; }
+  .empty { color: var(--text-muted); padding: 24px 10px; text-align: center; }
+  .refetching .card, .refetching .tiles { opacity: 0.55; transition: opacity .2s; }
+</style>
+<script>
+  // Apply the saved theme before first paint to avoid a flash of the wrong mode.
+  (function () {
+    const t = localStorage.getItem("wdemon-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  })();
+</script>
+</head>
+<body>
+<div class="wrap" id="app">
+  <header>
+    <h1>wdemon</h1>
+    <span class="sub">Wikidata edit monitor — flagged events</span>
+    <span class="spacer"></span>
+    <span class="live" id="live"><span class="dot"></span><span id="live-text">connecting…</span></span>
+    <button class="theme-btn" id="theme-btn" type="button" title="Switch color theme"></button>
+  </header>
+
+  <div class="filters">
+    <label>Range
+      <select id="f-since">
+        <option value="1">last hour</option>
+        <option value="6">last 6 h</option>
+        <option value="24" selected>last 24 h</option>
+        <option value="168">last 7 days</option>
+        <option value="720">last 30 days</option>
+      </select>
+    </label>
+    <label>User
+      <input type="text" id="f-user" placeholder="name contains…">
+    </label>
+    <label>Min score
+      <input type="number" id="f-score" step="0.5" min="0" placeholder="any">
+    </label>
+    <button id="f-clear" type="button">Clear filters</button>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card">
+    <h2>Flags by indicator <span id="bars-hint" style="text-transform:none;letter-spacing:0;font-weight:400">— click to filter</span></h2>
+    <div class="bars" id="bars"></div>
+  </div>
+
+  <div class="card">
+    <h2 id="table-title">Flagged events</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr id="thead-row"></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <div class="footnote" id="table-note"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const WD = "https://www.wikidata.org";
+const POLL_MS = 5000;
+const DISPLAY_CAP = 500;
+
+const state = {
+  rows: [],
+  truncated: false,
+  sinceHours: 24,
+  indicator: null,        // null = all
+  userQuery: "",
+  minScore: null,
+  status: "all",          // all | active | reverted | corrected
+  sort: { key: "time", dir: "desc" },
+  maxSeenId: 0,
+  freshIds: new Set(),
+  lastFetchOk: null,
+};
+
+/* ---------- data access ---------- */
+
+function rowStatus(r) {
+  if (r.reverted_at) return "reverted";
+  if (r.corrected_at) return "corrected";
+  return "active";
+}
+
+const COLUMNS = [
+  { key: "time",      label: "Time (UTC)", cls: "t-time" },
+  { key: "indicator", label: "Indicator",  cls: "t-ind" },
+  { key: "item",      label: "Item",       cls: "t-item" },
+  { key: "user",      label: "User",       cls: "t-user" },
+  { key: "score",     label: "Score",      cls: "t-score" },
+  { key: "details",   label: "Details",    cls: "t-details", nosort: true },
+  { key: "status",    label: "Status",     cls: "t-status" },
+  { key: "diff",      label: "Diff",       cls: "t-diff", nosort: true },
+];
+
+const SORT_ACCESSORS = {
+  time:      r => r.id,   // id is monotonic with processing order; never null
+  indicator: r => r.indicator_name || "",
+  item:      r => r.item_qid || "",
+  user:      r => r.event_user || "",
+  score:     r => (r.score == null ? null : r.score),
+  status:    r => rowStatus(r),
+};
+
+function passesNonStatusFilters(r) {
+  if (state.indicator && r.indicator_name !== state.indicator) return false;
+  if (state.userQuery &&
+      !(r.event_user || "").toLowerCase().includes(state.userQuery)) return false;
+  if (state.minScore != null && !(r.score >= state.minScore)) return false;
+  return true;
+}
+
+function filteredRows() {
+  return state.rows.filter(r =>
+    passesNonStatusFilters(r) &&
+    (state.status === "all" || rowStatus(r) === state.status));
+}
+
+function sortRows(rows) {
+  const { key, dir } = state.sort;
+  const acc = SORT_ACCESSORS[key] || SORT_ACCESSORS.time;
+  const mul = dir === "asc" ? 1 : -1;
+  return rows.slice().sort((a, b) => {
+    const va = acc(a), vb = acc(b);
+    if (va == null && vb == null) return b.id - a.id;
+    if (va == null) return 1;               // nulls last either direction
+    if (vb == null) return -1;
+    if (va < vb) return -1 * mul;
+    if (va > vb) return 1 * mul;
+    return b.id - a.id;                     // stable tiebreak: newest first
+  });
+}
+
+/* ---------- fetch / live update ---------- */
+
+let pollTimer = null;
+
+async function fetchRows({ showRefetch = false } = {}) {
+  if (showRefetch) document.getElementById("app").classList.add("refetching");
+  try {
+    const resp = await fetch(`/api/flags?since_hours=${state.sinceHours}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+
+    const prevMax = state.maxSeenId;
+    state.freshIds = new Set(
+      prevMax > 0
+        ? data.rows.filter(r => r.id > prevMax).map(r => r.id)
+        : []);
+    for (const r of data.rows) if (r.id > state.maxSeenId) state.maxSeenId = r.id;
+
+    state.rows = data.rows;
+    state.truncated = data.truncated;
+    state.lastFetchOk = new Date();
+    render();
+  } catch (e) {
+    state.lastFetchOk = state.lastFetchOk;  // keep last-good timestamp
+    renderLive(false);
+  } finally {
+    document.getElementById("app").classList.remove("refetching");
+  }
+}
+
+function schedulePoll() {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(() => {
+    if (!document.hidden) fetchRows();
+  }, POLL_MS);
+}
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) fetchRows();
+});
+
+/* ---------- rendering ---------- */
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+function renderLive(ok) {
+  const live = document.getElementById("live");
+  const txt = document.getElementById("live-text");
+  live.classList.toggle("stale", !ok);
+  if (ok) {
+    txt.textContent = `live — updated ${state.lastFetchOk.toLocaleTimeString()}`;
+  } else {
+    txt.textContent = state.lastFetchOk
+      ? `connection lost — last data ${state.lastFetchOk.toLocaleTimeString()}`
+      : "cannot reach server";
+  }
+}
+
+function renderTiles() {
+  const slice = state.rows.filter(passesNonStatusFilters);
+  const counts = { all: slice.length, active: 0, reverted: 0, corrected: 0 };
+  for (const r of slice) counts[rowStatus(r)]++;
+
+  const defs = [
+    { key: "all",       label: "Total flags", dot: "all" },
+    { key: "active",    label: "Active",      dot: "active" },
+    { key: "reverted",  label: "Reverted",    dot: "resolved" },
+    { key: "corrected", label: "Corrected",   dot: "resolved" },
+  ];
+  const wrap = document.getElementById("tiles");
+  wrap.replaceChildren();
+  for (const d of defs) {
+    const b = el("button", "tile" + (state.status === d.key ? " selected" : ""));
+    b.type = "button";
+    b.append(el("div", "value", counts[d.key].toLocaleString()));
+    const lab = el("div", "label");
+    const dot = el("span", "sdot " + d.dot);
+    lab.append(dot, document.createTextNode(d.label));
+    b.append(lab);
+    b.addEventListener("click", () => {
+      state.status = d.key;
+      render();
+    });
+    wrap.append(b);
+  }
+}
+
+function renderBars() {
+  // Bars are the indicator filter control: counts reflect every filter
+  // except the indicator selection itself.
+  const slice = state.rows.filter(r =>
+    (state.status === "all" || rowStatus(r) === state.status) &&
+    (!state.userQuery || (r.event_user || "").toLowerCase().includes(state.userQuery)) &&
+    (state.minScore == null || r.score >= state.minScore));
+
+  const counts = new Map();
+  for (const r of slice) {
+    counts.set(r.indicator_name, (counts.get(r.indicator_name) || 0) + 1);
+  }
+  if (state.indicator && !counts.has(state.indicator)) counts.set(state.indicator, 0);
+
+  const entries = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const max = Math.max(1, ...entries.map(e => e[1]));
+
+  const wrap = document.getElementById("bars");
+  wrap.replaceChildren();
+  if (!entries.length) {
+    wrap.append(el("div", "empty", "no flags in range"));
+    return;
+  }
+  for (const [name, count] of entries) {
+    const selected = state.indicator === name;
+    const dimmed = state.indicator && !selected;
+    const row = el("div",
+      "bar-row" + (selected ? " selected" : "") + (dimmed ? " dimmed" : ""));
+    row.setAttribute("role", "button");
+    row.tabIndex = 0;
+    row.title = selected ? `clear ${name} filter` : `filter to ${name}`;
+
+    row.append(el("div", "name", name));
+    const track = el("div", "track");
+    const fill = el("div", "fill");
+    fill.style.width = (100 * count / max).toFixed(1) + "%";
+    track.append(fill);
+    row.append(track);
+    row.append(el("div", "count", count.toLocaleString()));
+
+    const toggle = () => {
+      state.indicator = selected ? null : name;
+      render();
+    };
+    row.addEventListener("click", toggle);
+    row.addEventListener("keydown", ev => {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(); }
+    });
+    wrap.append(row);
+  }
+}
+
+function fmtTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ` +
+         `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+}
+
+function detailsSummary(r) {
+  const d = r.indicator_details;
+  if (d && typeof d === "object") {
+    if (typeof d.details === "string") return d.details;
+    if (typeof d.value === "string") return d.value;
+    return JSON.stringify(d);
+  }
+  return "";
+}
+
+function wdLink(path, text) {
+  const a = el("a", null, text);
+  a.href = WD + path;
+  a.target = "_blank";
+  a.rel = "noopener";
+  return a;
+}
+
+function renderHead() {
+  const tr = document.getElementById("thead-row");
+  tr.replaceChildren();
+  for (const col of COLUMNS) {
+    const th = el("th", col.nosort ? "nosort" : (col.cls === "t-score" ? "t-score" : null));
+    th.append(document.createTextNode(col.label));
+    if (!col.nosort) {
+      if (state.sort.key === col.key) {
+        th.append(document.createTextNode(" "));
+        th.append(el("span", "arrow", state.sort.dir === "asc" ? "▲" : "▼"));
+      }
+      th.addEventListener("click", () => {
+        if (state.sort.key === col.key) {
+          state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
+        } else {
+          state.sort = { key: col.key, dir: col.key === "time" ? "desc" : "asc" };
+          if (col.key === "score") state.sort.dir = "desc";
+        }
+        render();
+      });
+    }
+    tr.append(th);
+  }
+}
+
+function renderTable() {
+  renderHead();
+  const rows = sortRows(filteredRows());
+  const shown = rows.slice(0, DISPLAY_CAP);
+
+  const tbody = document.getElementById("tbody");
+  tbody.replaceChildren();
+
+  if (!shown.length) {
+    const tr = el("tr");
+    const td = el("td", "empty", "no flags match the current filters");
+    td.colSpan = COLUMNS.length;
+    tr.append(td);
+    tbody.append(tr);
+  }
+
+  for (const r of shown) {
+    const tr = el("tr", state.freshIds.has(r.id) ? "fresh" : null);
+
+    const tdTime = el("td", "t-time", fmtTime(r.event_timestamp || r.processed_timestamp));
+    tdTime.title = `processed ${fmtTime(r.processed_timestamp)} UTC`;
+    tr.append(tdTime);
+
+    tr.append(el("td", "t-ind", r.indicator_name));
+
+    const tdItem = el("td", "t-item");
+    if (r.item_qid) tdItem.append(wdLink("/wiki/" + encodeURI(r.item_qid), r.item_qid));
+    else tdItem.textContent = "—";
+    tr.append(tdItem);
+
+    const tdUser = el("td", "t-user");
+    if (r.event_user) {
+      tdUser.append(wdLink(
+        "/wiki/Special:Contributions/" + encodeURIComponent(r.event_user),
+        r.event_user));
+    } else tdUser.textContent = "—";
+    tr.append(tdUser);
+
+    tr.append(el("td", "t-score", r.score == null ? "—" : r.score.toFixed(2)));
+    tr.append(el("td", "t-details", detailsSummary(r)));
+
+    const tdStatus = el("td", "t-status");
+    const st = rowStatus(r);
+    const chip = el("span", "chip");
+    chip.append(el("span", "sdot " + (st === "active" ? "active" : "resolved")));
+    chip.append(document.createTextNode(st));
+    const when = r.reverted_at || r.corrected_at;
+    if (when) chip.title = `${st} at ${fmtTime(when)} UTC`;
+    tdStatus.append(chip);
+    tr.append(tdStatus);
+
+    const tdDiff = el("td", "t-diff");
+    if (r.revision_new) {
+      const q = r.revision_old
+        ? `?diff=${r.revision_new}&oldid=${r.revision_old}`
+        : `?diff=${r.revision_new}`;
+      tdDiff.append(wdLink("/w/index.php" + q, "diff"));
+    } else tdDiff.textContent = "—";
+    tr.append(tdDiff);
+
+    tbody.append(tr);
+  }
+
+  const note = document.getElementById("table-note");
+  const bits = [];
+  if (rows.length > shown.length) {
+    bits.push(`showing newest ${shown.length.toLocaleString()} of ${rows.length.toLocaleString()} matching flags`);
+  } else {
+    bits.push(`${rows.length.toLocaleString()} flag${rows.length === 1 ? "" : "s"}`);
+  }
+  if (state.truncated) bits.push("server row cap reached — narrow the time range for complete data");
+  note.textContent = bits.join(" · ");
+}
+
+function render() {
+  renderLive(true);
+  renderTiles();
+  renderBars();
+  renderTable();
+}
+
+/* ---------- filter controls ---------- */
+
+document.getElementById("f-since").addEventListener("change", ev => {
+  state.sinceHours = Number(ev.target.value);
+  state.maxSeenId = 0;          // don't flag the whole new range as fresh
+  fetchRows({ showRefetch: true });
+});
+document.getElementById("f-user").addEventListener("input", ev => {
+  state.userQuery = ev.target.value.trim().toLowerCase();
+  render();
+});
+document.getElementById("f-score").addEventListener("input", ev => {
+  const v = ev.target.value;
+  state.minScore = v === "" ? null : Number(v);
+  render();
+});
+document.getElementById("f-clear").addEventListener("click", () => {
+  state.indicator = null;
+  state.userQuery = "";
+  state.minScore = null;
+  state.status = "all";
+  document.getElementById("f-user").value = "";
+  document.getElementById("f-score").value = "";
+  render();
+});
+
+/* ---------- theme toggle: auto → light → dark ---------- */
+
+const THEME_LABELS = { auto: "Theme: auto", light: "Theme: light", dark: "Theme: dark" };
+const THEME_ORDER = ["auto", "light", "dark"];
+
+function currentTheme() {
+  const t = localStorage.getItem("wdemon-theme");
+  return t === "light" || t === "dark" ? t : "auto";
+}
+
+function applyTheme(t) {
+  if (t === "auto") {
+    delete document.documentElement.dataset.theme;
+    localStorage.removeItem("wdemon-theme");
+  } else {
+    document.documentElement.dataset.theme = t;
+    localStorage.setItem("wdemon-theme", t);
+  }
+  document.getElementById("theme-btn").textContent = THEME_LABELS[t];
+}
+
+document.getElementById("theme-btn").addEventListener("click", () => {
+  const next = THEME_ORDER[(THEME_ORDER.indexOf(currentTheme()) + 1) % THEME_ORDER.length];
+  applyTheme(next);
+});
+applyTheme(currentTheme());
+
+fetchRows();
+schedulePoll();
+</script>
+</body>
+</html>
