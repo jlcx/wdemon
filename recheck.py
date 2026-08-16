@@ -15,8 +15,12 @@ Two checks, both batched (50 per request):
   2. Term check (bad_description, labels_less_consistent): fetch the item's
      current label/description and test whether the flagged issue is still
      present; if not, mark the row corrected.
+  3. Claim check (self_reference_added): fetch the item's current claims for
+     the flagged property and test whether any statement still points at the
+     item itself; if not, mark the row corrected.
 """
 import logging
+import re
 from collections import defaultdict
 
 import requests
@@ -139,6 +143,62 @@ def _check_terms(session, rows):
     return corrected, errors
 
 
+def _self_ref_property(row):
+    """Property id of a self_reference_added flag. Old rows lack a structured
+    property_id; fall back to the 'P123' token in the details string."""
+    details = row['indicator_details'] or {}
+    pid = details.get('property_id')
+    if not pid:
+        m = re.search(r'\bP\d+\b', details.get('details') or '')
+        pid = m.group(0) if m else None
+    return pid
+
+
+def _self_ref_gone(row, entity):
+    """True if no statement on the flagged property points at the item itself."""
+    pid = _self_ref_property(row)
+    if not pid:
+        return False
+    qid = row['item_qid']
+    for claim in entity.get('claims', {}).get(pid) or []:
+        value = (claim.get('mainsnak', {}).get('datavalue') or {}).get('value')
+        if isinstance(value, dict) and value.get('id') == qid:
+            return False
+    return True
+
+
+def _check_self_refs(session, rows):
+    """Returns (set of flag ids whose self-reference is gone, error count)."""
+    by_qid = defaultdict(list)
+    for r in rows:
+        qid = r['item_qid']
+        if (qid and r['indicator_name'] == 'self_reference_added'
+                and qid.startswith('Q')):
+            by_qid[qid].append(r)
+
+    corrected, errors = set(), 0
+    for chunk in _chunks(list(by_qid), API_BATCH):
+        try:
+            data = _api_get(session, {
+                'action': 'wbgetentities',
+                'ids': '|'.join(chunk),
+                'props': 'claims',
+            })
+        except Exception as e:
+            logger.warning(f"recheck claims query failed: {e}")
+            errors += 1
+            continue
+        entities = data.get('entities', {})
+        for qid in chunk:
+            entity = entities.get(qid)
+            if not entity or 'missing' in entity:
+                continue
+            for row in by_qid[qid]:
+                if _self_ref_gone(row, entity):
+                    corrected.add(row['id'])
+    return corrected, errors
+
+
 def recheck_flags(db_pool, ids=None, max_rows=DEFAULT_MAX_ROWS):
     """
     Rechecks active flags (optionally restricted to `ids`) against the live
@@ -171,6 +231,8 @@ def recheck_flags(db_pool, ids=None, max_rows=DEFAULT_MAX_ROWS):
     reverted, rev_errors = _check_reverted(session, rows)
     remaining = [r for r in rows if r['id'] not in reverted]
     corrected, term_errors = _check_terms(session, remaining)
+    self_ref_corrected, claim_errors = _check_self_refs(session, remaining)
+    corrected |= self_ref_corrected
 
     with db_pool.connection() as conn, conn.cursor() as cur:
         if reverted:
@@ -194,5 +256,5 @@ def recheck_flags(db_pool, ids=None, max_rows=DEFAULT_MAX_ROWS):
         "checked": len(rows),
         "reverted": sorted(reverted),
         "corrected": sorted(corrected),
-        "api_errors": rev_errors + term_errors,
+        "api_errors": rev_errors + term_errors + claim_errors,
     }

@@ -87,10 +87,11 @@ def self_reference_added(processed_event, logger=None, db_pool=None):
     title = processed_event['title']
     parsed_comment = parse_edit_comment(processed_event['comment'])
     details = parsed_comment.get('details', {})
-    pid = parsed_comment.get('property_id', {})
+    pid = parsed_comment.get('property_id')
     if 'claim_value_qid' in details and details['claim_value_qid'] == title:
         return {
             "indicator": indicator_name,
+            "property_id": pid,
             "details": f"Self-reference added: {title} {pid} {title}"
         }
     else:

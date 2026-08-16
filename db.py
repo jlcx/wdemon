@@ -74,10 +74,19 @@ def mark_corrections(db_pool, event, fired_indicators):
     Slot mapping per indicator:
       bad_description         -> (item_qid, details->>'lang')   action wbsetdescription-*
       labels_less_consistent  -> (item_qid, details->>'lang')   action wbsetlabel-set
+      self_reference_added    -> (item_qid, property_id)        claim edits (see below)
 
-    Known limitation: if a correction is itself later reverted, the bad content
-    comes back, but the flag's corrected_at remains set (it is not cleared).
-    The report will still treat the flag as resolved in that edge case.
+    For self_reference_added, any claim edit (wbsetclaim-*, wbcreateclaim-*,
+    wbremoveclaims-*) on the same (item, property) that does not itself fire
+    the indicator counts as a correction — changing the self-referencing value
+    or removing the claim. Old rows lack a structured property_id, so matching
+    falls back to the ' P123 ' token in the details string.
+
+    Known limitations: if a correction is itself later reverted, the bad
+    content comes back, but the flag's corrected_at remains set (it is not
+    cleared). A property with multiple statements can be marked corrected by
+    an edit to a different statement while the self-reference remains; the
+    API recheck (recheck.py) is the authority in that case.
     """
     if not db_pool:
         return 0
@@ -106,6 +115,25 @@ def mark_corrections(db_pool, event, fired_indicators):
                        AND corrected_at IS NULL
                     """,
                     (qid, lang),
+                )
+                total += cur.rowcount
+
+            pid = parsed.get('property_id')
+            if (action.startswith(('wbsetclaim', 'wbcreateclaim', 'wbremoveclaims'))
+                    and 'self_reference_added' not in fired_indicators
+                    and pid):
+                cur.execute(
+                    """
+                    UPDATE flagged_events
+                       SET corrected_at = NOW()
+                     WHERE indicator_name = 'self_reference_added'
+                       AND item_qid = %s
+                       AND ((indicator_details->>'property_id') = %s
+                            OR indicator_details->>'details' LIKE %s)
+                       AND reverted_at IS NULL
+                       AND corrected_at IS NULL
+                    """,
+                    (qid, pid, f'% {pid} %'),
                 )
                 total += cur.rowcount
 
