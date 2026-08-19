@@ -108,9 +108,13 @@ def life_dates_changed(processed_event, logger=None, db_pool=None):
     date_props = ("P569", "P570")
     title = processed_event['title']
     parsed_comment = parse_edit_comment(processed_event['comment'])
-    pid = parsed_comment.get('property_id', {})
-    if pid in date_props:
-        # logger.info("well, that's interesting")
+    # property_id is None when the claim value isn't a QID link — which is
+    # every date value — so also check for the property in the trailing text
+    trailing = parsed_comment.get('details', {}).get('manual_comment_part', '')
+    pid = parsed_comment.get('property_id')
+    if pid not in date_props:
+        pid = next((p for p in date_props if f'[[Property:{p}]]' in trailing), None)
+    if pid:
         return {
             "indicator": indicator_name,
             "details": f"Property {pid} changed on {title}"
