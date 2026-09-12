@@ -15,9 +15,11 @@ Two checks, both batched (50 per request):
   2. Term check (bad_description, labels_less_consistent): fetch the item's
      current label/description and test whether the flagged issue is still
      present; if not, mark the row corrected.
-  3. Claim check (self_reference_added): fetch the item's current claims for
-     the flagged property and test whether any statement still points at the
-     item itself; if not, mark the row corrected.
+  3. Claim check (self_reference_added, known_vandalism_value): fetch the
+     item's current claims for the flagged property and test whether the
+     flagged value is still there — a statement pointing at the item itself,
+     or one carrying the flagged vandalism-magnet QID; if not, mark the row
+     corrected.
 """
 import logging
 import re
@@ -167,13 +169,41 @@ def _self_ref_gone(row, entity):
     return True
 
 
-def _check_self_refs(session, rows):
-    """Returns (set of flag ids whose self-reference is gone, error count)."""
+def _magnet_value_gone(row, entity):
+    """True if no statement still carries the flagged vandalism-magnet QID as
+    its value."""
+    details = row['indicator_details'] or {}
+    value_qid = details.get('value_qid')
+    if not value_qid:
+        return False
+    claims = entity.get('claims', {})
+    pid = details.get('property_id')
+    # A row with no property recorded is only cleared once the value is gone
+    # from the item entirely — the conservative reading.
+    groups = [claims.get(pid) or []] if pid else list(claims.values())
+    for group in groups:
+        for claim in group:
+            value = (claim.get('mainsnak', {}).get('datavalue') or {}).get('value')
+            if isinstance(value, dict) and value.get('id') == value_qid:
+                return False
+    return True
+
+
+# Indicators resolved by refetching claims, and the predicate that decides
+# whether each one's flagged value is gone. Both share a single wbgetentities
+# pass, so an item flagged by both costs one request.
+CLAIM_CHECKS = {
+    'self_reference_added': _self_ref_gone,
+    'known_vandalism_value': _magnet_value_gone,
+}
+
+
+def _check_claims(session, rows):
+    """Returns (set of flag ids whose flagged claim value is gone, error count)."""
     by_qid = defaultdict(list)
     for r in rows:
         qid = r['item_qid']
-        if (qid and r['indicator_name'] == 'self_reference_added'
-                and qid.startswith('Q')):
+        if qid and r['indicator_name'] in CLAIM_CHECKS and qid.startswith('Q'):
             by_qid[qid].append(r)
 
     corrected, errors = set(), 0
@@ -194,7 +224,7 @@ def _check_self_refs(session, rows):
             if not entity or 'missing' in entity:
                 continue
             for row in by_qid[qid]:
-                if _self_ref_gone(row, entity):
+                if CLAIM_CHECKS[row['indicator_name']](row, entity):
                     corrected.add(row['id'])
     return corrected, errors
 
@@ -231,8 +261,8 @@ def recheck_flags(db_pool, ids=None, max_rows=DEFAULT_MAX_ROWS):
     reverted, rev_errors = _check_reverted(session, rows)
     remaining = [r for r in rows if r['id'] not in reverted]
     corrected, term_errors = _check_terms(session, remaining)
-    self_ref_corrected, claim_errors = _check_self_refs(session, remaining)
-    corrected |= self_ref_corrected
+    claim_corrected, claim_errors = _check_claims(session, remaining)
+    corrected |= claim_corrected
 
     with db_pool.connection() as conn, conn.cursor() as cur:
         if reverted:

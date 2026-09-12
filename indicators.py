@@ -97,6 +97,57 @@ def self_reference_added(processed_event, logger=None, db_pool=None):
     else:
         return None
 
+# QIDs repeatedly used as statement values by vandals. Q615 (Lionel Messi) and
+# Q11571 (Cristiano Ronaldo) get inserted as father/spouse/member-of on
+# unrelated people; Q488111 (pornographic film actor) as occupation; and
+# Q134227481 (Tung Tung Tung Sahur, an AI-generated meme) on anything at all.
+VANDALISM_MAGNET_QIDS = {
+    'Q615': 'Lionel Messi',
+    'Q11571': 'Cristiano Ronaldo',
+    'Q488111': 'pornographic film actor',
+    'Q134227481': 'Tung Tung Tung Sahur',
+}
+
+
+def known_vandalism_value(processed_event, logger=None, db_pool=None,
+                          magnet_qids=VANDALISM_MAGNET_QIDS):
+    """
+    Flags a claim create/update whose value is one of a small set of QIDs that
+    are repeatedly used for vandalism (see VANDALISM_MAGNET_QIDS).
+
+    Value-only: the property is recorded but not filtered on, since the same
+    QIDs get pasted into whatever property is at hand. Claim removals are
+    ignored — taking one of these values off an item is the fix, not the
+    problem. Uses CLAIM_CREATE_OR_UPDATE from the Tier 2 section below;
+    resolved at call time, so the forward reference is fine.
+
+    Known false positive: a 'wbsetclaim-update' that only touches a qualifier
+    or reference of a claim already pointing at a magnet QID still carries the
+    mainsnak value in its comment, so it fires. The stream comment carries no
+    signal to separate that from a value change.
+    """
+    indicator_name = "known_vandalism_value"
+    title = processed_event.get('title')
+    parsed = parse_edit_comment(processed_event.get('comment', ''))
+    if parsed.get('action') not in CLAIM_CREATE_OR_UPDATE:
+        return None
+    value_qid = (parsed.get('details') or {}).get('claim_value_qid')
+    if value_qid not in magnet_qids:
+        return None
+    pid = parsed.get('property_id')
+    label = magnet_qids[value_qid]
+    if logger:
+        logger.info(f"{indicator_name} triggered for {title} "
+                    f"(RC_ID: {processed_event.get('rc_id')}): {pid} -> {value_qid}")
+    return {
+        "indicator": indicator_name,
+        "property_id": pid,
+        "value_qid": value_qid,
+        "value_label": label,
+        "details": f"{title} {pid or '?'} -> {value_qid} ({label})",
+    }
+
+
 # TODO what about a more general "date changed"?  what about a more specific "date changed to" (e.g. 2001-9-11)?  how should these be organized?
 
 def life_dates_changed(processed_event, logger=None, db_pool=None):
