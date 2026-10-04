@@ -11,6 +11,7 @@ Usage:
     python dashboard.py [--host 127.0.0.1] [--port 8000]
 """
 import argparse
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Query
@@ -26,18 +27,19 @@ HTML_PATH = Path(__file__).parent / "dashboard.html"
 # Hard cap on rows returned per request, newest first.
 MAX_ROWS = 20000
 
-app = FastAPI(title="wdemon dashboard")
 pool = ConnectionPool(conninfo=DB_CONNINFO, min_size=1, max_size=4, open=False)
 
 
-@app.on_event("startup")
-def _open_pool():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     pool.open()
+    try:
+        yield
+    finally:
+        pool.close()
 
 
-@app.on_event("shutdown")
-def _close_pool():
-    pool.close()
+app = FastAPI(title="wdemon dashboard", lifespan=lifespan)
 
 
 @app.get("/")
@@ -106,4 +108,6 @@ if __name__ == "__main__":
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
     args = ap.parse_args()
-    uvicorn.run(app, host=args.host, port=args.port)
+    # ws="none": the dashboard is HTTP-polling only, and uvicorn's default
+    # websocket auto-detection imports the deprecated websockets.legacy module.
+    uvicorn.run(app, host=args.host, port=args.port, ws="none")
